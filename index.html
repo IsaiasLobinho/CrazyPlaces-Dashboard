@@ -677,8 +677,8 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
 // └────────────────────────────────────────────────────────────┘
 // ══════════════════════════════════════════════════════════════
 
-const SUPABASE_URL  = 'https://oygvjhmmqsqjndybfvct.supabase.co';
-const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z3ZqaG1tcXNxam5keWJmdmN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NjY4MTYsImV4cCI6MjA5ODI0MjgxNn0.wFLVA6BSwzt0z_JTHYP_lr8bwXVnGVxEkDNByKZye4U';
+const SUPABASE_URL  = 'https://TU-PROYECTO.supabase.co';
+const SUPABASE_KEY  = 'TU-ANON-KEY';
 
 // ── ESTADO GLOBAL ────────────────────────────────────────────
 const CP = {
@@ -1048,17 +1048,51 @@ const SEGS_RX = [
   /^(\d+)[.)]\s+(.*)/
 ];
 
+function isAllCapsHeader(line) {
+  const t = line.trim();
+  if (t.length < 4 || t.length > 80) return false;
+  if (t.startsWith('//') || t.startsWith('--') || t.startsWith('/*')) return false;
+  const letters = t.replace(/[^a-zA-Z]/g, '');
+  if (letters.length < 3) return false;
+  const upperRatio = (t.replace(/[^A-Z]/g, '').length) / letters.length;
+  return upperRatio >= 0.85; // 85%+ uppercase letters
+}
+
 function detectClipSegs() {
   const text = document.getElementById('clips-script').value.trim();
   if (!text) { toast('Pegá un guión o lista de lugares', 'warning'); return; }
+  const lines = text.split('\n');
   const segs = [];
-  for (const line of text.split('\n')) {
+
+  // Pass 1: try numbered regex patterns
+  for (const line of lines) {
     const t = line.trim();
     for (const rx of SEGS_RX) {
       const m = t.match(rx);
-      if (m) { const name = (m[2] || '').replace(/\*+/g, '').trim(); if (name.length > 2) { segs.push({ num: parseInt(m[1]), name }); } break; }
+      if (m) {
+        const name = (m[2] || '').replace(/\*+/g, '').trim();
+        if (name.length > 2) { segs.push({ num: parseInt(m[1]), name }); }
+        break;
+      }
     }
   }
+
+  // Pass 2: if no numbered segs found, detect ALL-CAPS headers
+  if (!segs.length) {
+    let counter = 0;
+    for (const line of lines) {
+      const t = line.trim();
+      // Skip separator lines and very short lines
+      if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
+      if (isAllCapsHeader(t)) {
+        counter++;
+        // Clean trailing punctuation
+        const name = t.replace(/[.:,;!?]+$/, '').trim();
+        segs.push({ num: counter, name });
+      }
+    }
+  }
+
   if (!segs.length) { detectSegsAI(text); return; }
   CP.clips.segs = segs;
   renderClipSegs();
@@ -1533,6 +1567,8 @@ function detectVoiceSegs() {
   const lines = text.split('\n');
   const segs = [];
   let cur = null, curLines = [];
+
+  // First try: numbered markers
   for (const line of lines) {
     const t = line.trim();
     let matched = false;
@@ -1547,7 +1583,27 @@ function detectVoiceSegs() {
     if (!matched && cur !== null) curLines.push(t);
   }
   if (cur !== null) segs.push({ num: cur, text: curLines.join('\n').trim() });
-  const valid = segs.filter(s => s.text.length > 10);
+
+  let valid = segs.filter(s => s.text.length > 10);
+
+  // Fallback: ALL-CAPS headers (Crazy Places documentary format)
+  if (!valid.length) {
+    let counter = 0; cur = null; curLines = [];
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
+      if (isAllCapsHeader(t)) {
+        if (counter > 0) segs.push({ num: counter, text: curLines.join('\n').trim() });
+        counter++;
+        curLines = [];
+      } else if (counter > 0) {
+        curLines.push(t);
+      }
+    }
+    if (counter > 0 && curLines.length) segs.push({ num: counter, text: curLines.join('\n').trim() });
+    valid = segs.filter(s => s.text.length > 10);
+  }
+
   if (!valid.length) { detectVoiceSegsAI(text); return; }
   CP.voices.segs = valid; CP.voices.audio = {};
   renderVoiceSegs();
