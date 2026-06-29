@@ -685,8 +685,8 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
 // └────────────────────────────────────────────────────────────┘
 // ══════════════════════════════════════════════════════════════
 
-const SUPABASE_URL  = 'https://oygvjhmmqsqjndybfvct.supabase.co';
-const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z3ZqaG1tcXNxam5keWJmdmN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NjY4MTYsImV4cCI6MjA5ODI0MjgxNn0.wFLVA6BSwzt0z_JTHYP_lr8bwXVnGVxEkDNByKZye4U';
+const SUPABASE_URL  = 'https://TU-PROYECTO.supabase.co';
+const SUPABASE_KEY  = 'TU-ANON-KEY';
 
 // ── ESTADO GLOBAL ────────────────────────────────────────────
 const CP = {
@@ -1862,6 +1862,121 @@ async function saveCredits(id) {
 }
 
 // ── UTILS ────────────────────────────────────────────────────
+// ── DOWNLOAD SCRIPT GENERATOR ────────────────────────────────
+var _dlScript = '';
+
+function genDlScript() {
+  var results = CP.clips.results;
+  if (!Object.keys(results).length) { toast('Sin videos para descargar', 'warning'); return; }
+  var checkedVids = new Set(
+    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
+  );
+  var segs = CP.clips.segs;
+  var totalVideos = 0;
+  var blocks = [];
+  for (var i = 0; i < segs.length; i++) {
+    var seg = segs[i];
+    var videos = results[seg.num] || [];
+    if (!videos.length) continue;
+    var toDownload = checkedVids.size > 0
+      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
+      : videos;
+    if (!toDownload.length) continue;
+    var safeName = seg.name.replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'_').slice(0,40);
+    var folderName = String(seg.num).padStart(2,'0') + '_' + safeName;
+    var urlLines = toDownload.map(function(v){
+      return "        'https://www.youtube.com/watch?v=" + (v.id && v.id.videoId || '') + "'";
+    }).join(',\n');
+    totalVideos += toDownload.length;
+    blocks.push({ folderName: folderName, urlLines: urlLines, segName: seg.name, count: toDownload.length });
+  }
+  if (!blocks.length) { toast('Sin videos para el script', 'warning'); return; }
+  var segBlocks = blocks.map(function(b){
+    return (
+      '    # ' + b.segName + ' (' + b.count + ' videos)\n' +
+      '    {\n' +
+      "        'folder': os.path.join(OUTPUT_DIR, '" + b.folderName + "'),\n" +
+      "        'urls': [\n" + b.urlLines + '\n        ]\n    }'
+    );
+  }).join(',\n');
+  var nBlocks = blocks.length;
+  var nVids = totalVideos;
+  var py = [
+    '#!/usr/bin/env python3',
+    '# CRAZY PLACES -- Auto-Downloader',
+    '# REQUISITOS: pip install yt-dlp',
+    '# USO:        python crazy_places_download.py',
+    '',
+    'import os, sys, subprocess, zipfile',
+    'from datetime import datetime',
+    '',
+    'OUTPUT_DIR = "crazy_places_downloads"',
+    'FORMAT = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
+    '',
+    'SEGMENTS = [',
+    segBlocks,
+    ']',
+    '',
+    'def check_ytdlp():',
+    '    try:',
+    '        subprocess.run(["yt-dlp","--version"], capture_output=True, check=True)',
+    '    except (subprocess.CalledProcessError, FileNotFoundError):',
+    '        print("ERROR: instalar con: pip install yt-dlp"); sys.exit(1)',
+    '',
+    'def download_segment(seg):',
+    '    os.makedirs(seg["folder"], exist_ok=True)',
+    '    print("\n[LUGAR] " + os.path.basename(seg["folder"]))',
+    '    ok = 0',
+    '    for url in seg["urls"]:',
+    '        print("  -> " + url)',
+    '        r = subprocess.run(["yt-dlp","-f",FORMAT,"-o",',
+    '            os.path.join(seg["folder"],"%(title)s.%(ext)s"),',
+    '            "--no-playlist","--restrict-filenames","--retries","3",url])',
+    '        if r.returncode == 0: ok += 1; print("     OK")',
+    '        else: print("     ADVERTENCIA: error (privado o eliminado)")',
+    '    return ok',
+    '',
+    'def create_zip():',
+    '    ts = datetime.now().strftime("%Y%m%d_%H%M")',
+    '    zname = "crazy_places_" + ts + ".zip"',
+    '    with zipfile.ZipFile(zname,"w",zipfile.ZIP_DEFLATED) as zf:',
+    '        for root,dirs,files in os.walk(OUTPUT_DIR):',
+    '            for f in files:',
+    '                fp = os.path.join(root,f)',
+    '                zf.write(fp, os.path.relpath(fp, os.path.dirname(OUTPUT_DIR)))',
+    '    mb = round(os.path.getsize(zname)/1048576,1)',
+    '    print("ZIP listo: " + zname + " (" + str(mb) + " MB)")',
+    '',
+    'def main():',
+    '    print("CRAZY PLACES -- Auto-Downloader")',
+    '    check_ytdlp()',
+    '    os.makedirs(OUTPUT_DIR, exist_ok=True)',
+    '    ok = sum(download_segment(s) for s in SEGMENTS)',
+    '    print("Total: " + str(ok) + "/" + str(sum(len(s[\"urls\"]) for s in SEGMENTS)))',
+    '    if ok > 0: create_zip()',
+    '',
+    'if __name__ == "__main__":',
+    '    main()'
+  ].join('\n');
+  _dlScript = py;
+  document.getElementById('dl-script-info').classList.remove('hidden');
+  document.getElementById('dl-script-summary').textContent =
+    nBlocks + ' carpetas · ' + nVids + ' videos' +
+    (checkedVids.size > 0 ? ' (solo seleccionados)' : ' (todos los resultados)');
+  toast('Script generado ✓', 'success');
+}
+
+function downloadDlScript() {
+  if (!_dlScript) { toast('Apreta primero el boton Script yt-dlp', 'warning'); return; }
+  var blob = new Blob([_dlScript], { type: 'text/plain' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'crazy_places_download.py';
+  a.click();
+  toast('Script descargado', 'success');
+}
+
+
 function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
