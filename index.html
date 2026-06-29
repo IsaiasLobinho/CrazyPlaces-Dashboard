@@ -403,7 +403,15 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
         <div class="row">
           <button class="btn btn-v btn-sm" id="btn-vision" data-action="analyze-vision" disabled>🤖 Analizar con IA</button>
           <button class="btn btn-s btn-sm" id="btn-export" data-action="export-links" disabled>📋 Exportar .txt</button>
+          <button class="btn btn-ok btn-sm" id="btn-dl-script" data-action="gen-dl-script" disabled>📥 Script yt-dlp</button>
         </div>
+      </div>
+      <div id="dl-script-info" class="panel glass hidden" style="border-color:rgba(16,185,129,.2)">
+        <div class="pt cok">📥 Script de Descarga</div>
+        <p class="muted mb12">Organiza videos en carpetas por lugar y crea un ZIP. Ejecutalo en tu PC.</p>
+        <div style="font-size:11px;color:var(--t2);background:rgba(0,0,0,.3);border-radius:6px;padding:10px;font-family:monospace;margin-bottom:12px">pip install yt-dlp<br>python crazy_places_download.py</div>
+        <div id="dl-script-summary" class="muted mb12"></div>
+        <button class="btn btn-ok btn-sm" data-action="download-dl-script">⬇️ Descargar script .py</button>
       </div>
       <div id="clips-results">
         <div class="empty glass" style="border-radius:10px">
@@ -677,8 +685,8 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
 // └────────────────────────────────────────────────────────────┘
 // ══════════════════════════════════════════════════════════════
 
-const SUPABASE_URL  = 'https://oygvjhmmqsqjndybfvct.supabase.co';
-const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z3ZqaG1tcXNxam5keWJmdmN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NjY4MTYsImV4cCI6MjA5ODI0MjgxNn0.wFLVA6BSwzt0z_JTHYP_lr8bwXVnGVxEkDNByKZye4U';
+const SUPABASE_URL  = 'https://TU-PROYECTO.supabase.co';
+const SUPABASE_KEY  = 'TU-ANON-KEY';
 
 // ── ESTADO GLOBAL ────────────────────────────────────────────
 const CP = {
@@ -790,6 +798,8 @@ function setupEvents() {
       'gen-titles': genTitles,
       'copy-txt': () => copyTxt(el.dataset.txt),
       'save-prompt': savePrompt, 'delete-prompt': () => deletePrompt(el.dataset.id),
+      'gen-dl-script': genDlScript,
+      'download-dl-script': downloadDlScript,
       'create-user': createUser, 'reload-users': loadUsers,
       'toggle-user': () => toggleUser(el.dataset.id, el.dataset.dis === 'true'),
       'change-role': () => changeRole(el.dataset.id, el.dataset.role),
@@ -1160,6 +1170,7 @@ async function searchClips() {
     }
     document.getElementById('btn-vision').disabled = false;
     document.getElementById('btn-export').disabled = false;
+    document.getElementById('btn-dl-script').disabled = false;
     toast('Búsqueda completada', 'success');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '▶ Buscar YouTube'; }
