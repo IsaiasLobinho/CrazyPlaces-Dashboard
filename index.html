@@ -716,10 +716,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupEvents();
 
   try {
-    if (SUPABASE_URL.includes('TU-PROYECTO') || SUPABASE_KEY.includes('TU-ANON')) {
-      toast('Configurá la URL y key de Supabase en el archivo (busca TU-PROYECTO)', 'warning');
-      return;
-    }
+    // Credenciales configuradas
     CP.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     const { data: { session } } = await CP.sb.auth.getSession();
     if (session) { CP.user = session.user; await postLogin(); }
