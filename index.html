@@ -341,6 +341,9 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
   <div class="navr">
     <button class="nb hidden" id="nav-admin" data-action="nav" data-sec="admin">👤 Admin</button>
     <span class="uchip" id="u-email"></span>
+    <div id="srv-chip" class="chip" title="Servidor local de descarga" style="cursor:pointer" data-action="check-server">
+      <div class="dot" id="srv-dot"></div><span id="srv-label">Servidor</span>
+    </div>
     <button class="btn btn-s btn-sm" data-action="open-cfg">⚙️</button>
     <button class="btn btn-s btn-sm" data-action="logout">Salir</button>
   </div>
@@ -406,12 +409,21 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
           <button class="btn btn-ok btn-sm" id="btn-dl-script" data-action="gen-dl-script" disabled>📥 Script yt-dlp</button>
         </div>
       </div>
+      <div id="dl-progress-panel" class="panel glass hidden" style="border-color:rgba(0,210,200,.2)">
+        <div class="pt cc1">🚀 Descarga en progreso</div>
+        <div class="pbar mb8"><div class="pfill" id="dl-pfill" style="width:0%"></div></div>
+        <div id="dl-progress-text" class="muted mb8">Iniciando...</div>
+        <div id="dl-log" style="font-size:11px;font-family:monospace;color:var(--t2);max-height:140px;overflow-y:auto;background:rgba(0,0,0,.3);border-radius:6px;padding:8px"></div>
+        <div class="row mt12">
+          <button class="btn btn-ok btn-sm hidden" id="btn-open-folder" data-action="open-dl-folder">📁 Abrir carpeta</button>
+        </div>
+      </div>
       <div id="dl-script-info" class="panel glass hidden" style="border-color:rgba(16,185,129,.2)">
         <div class="pt cok">📥 Script de Descarga</div>
         <p class="muted mb12">Organiza videos en carpetas por lugar y crea un ZIP. Ejecutalo en tu PC.</p>
-        <div style="font-size:11px;color:var(--t2);background:rgba(0,0,0,.3);border-radius:6px;padding:10px;font-family:monospace;margin-bottom:12px">pip install yt-dlp<br>python crazy_places_download.py</div>
+        <div style="font-size:11px;color:var(--t2);background:rgba(0,0,0,.3);border-radius:6px;padding:10px;font-family:monospace;margin-bottom:12px">1. Descargar el .bat<br>2. Doble click para ejecutar<br>3. Crea carpetas + ZIP automaticamente</div>
         <div id="dl-script-summary" class="muted mb12"></div>
-        <button class="btn btn-ok btn-sm" data-action="download-dl-script">⬇️ Descargar script .py</button>
+        <button class="btn btn-ok btn-sm" data-action="download-dl-script">⬇️ Descargar .bat</button>
       </div>
       <div id="clips-results">
         <div class="empty glass" style="border-radius:10px">
@@ -700,10 +712,21 @@ const CP = {
 
 // ── INIT ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  CP.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // setupEvents SIEMPRE primero — si Supabase falla los botones igual responden
   setupEvents();
-  const { data: { session } } = await CP.sb.auth.getSession();
-  if (session) { CP.user = session.user; await postLogin(); }
+
+  try {
+    if (SUPABASE_URL.includes('TU-PROYECTO') || SUPABASE_KEY.includes('TU-ANON')) {
+      toast('Configurá la URL y key de Supabase en el archivo (busca TU-PROYECTO)', 'warning');
+      return;
+    }
+    CP.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const { data: { session } } = await CP.sb.auth.getSession();
+    if (session) { CP.user = session.user; await postLogin(); }
+  } catch(e) {
+    toast('Error de conexión: ' + (e.message || e), 'error');
+    console.error('Init error:', e);
+  }
 });
 
 // ── AUTH ─────────────────────────────────────────────────────
@@ -711,6 +734,7 @@ async function doLogin() {
   const email = document.getElementById('l-email').value.trim();
   const pass  = document.getElementById('l-pass').value;
   if (!email || !pass) { toast('Completá email y contraseña', 'warning'); return; }
+  if (!CP.sb) { toast('Supabase no inicializado. Verificá la URL y key en el código.', 'error'); return; }
   const btn = document.getElementById('l-btn');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Ingresando...';
   try {
@@ -737,6 +761,8 @@ async function postLogin() {
   document.getElementById('app-main').style.display = 'block';
   document.getElementById('u-email').textContent = CP.user.email.split('@')[0];
   if (CP.prof.role === 'admin') document.getElementById('nav-admin').classList.remove('hidden');
+  checkServer();
+  setInterval(checkServer, 8000);
   showSec('home');
 }
 
@@ -799,6 +825,9 @@ function setupEvents() {
       'copy-txt': () => copyTxt(el.dataset.txt),
       'save-prompt': savePrompt, 'delete-prompt': () => deletePrompt(el.dataset.id),
       'gen-dl-script': genDlScript,
+      'direct-download': directDownload,
+      'check-server': checkServer,
+      'open-dl-folder': openDlFolder,
       'download-dl-script': downloadDlScript,
       'create-user': createUser, 'reload-users': loadUsers,
       'toggle-user': () => toggleUser(el.dataset.id, el.dataset.dis === 'true'),
@@ -1971,7 +2000,215 @@ function downloadDlScript() {
   var blob = new Blob([_dlScript], { type: 'text/plain' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'crazy_places_download.py';
+  a.download = 'crazy_places_download.bat';
+  a.click();
+  toast('Script descargado', 'success');
+}
+
+
+function esc(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escA(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+async function copyTxt(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copiado ✓', 'success'); }
+  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Copiado ✓', 'success'); }
+}
+</script>
+</body>
+</html
+// -- SERVER LOCAL -----------------------------------------------
+var SERVER = 'http://localhost:8765';
+var _srvConnected = false;
+var _progressInterval = null;
+
+function checkServer() {
+  fetch(SERVER + '/status', { signal: AbortSignal.timeout(1500) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      _srvConnected = true;
+      document.getElementById('srv-dot').className = 'dot ok';
+      document.getElementById('srv-label').textContent = 'Servidor ✓';
+      var btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.remove('hidden');
+    })
+    .catch(function(){
+      _srvConnected = false;
+      document.getElementById('srv-dot').className = 'dot err';
+      document.getElementById('srv-label').textContent = 'Servidor offline';
+      var btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.add('hidden');
+    });
+}
+
+function directDownload() {
+  if (!_srvConnected) {
+    toast('Servidor offline. Ejecuta iniciar_servidor.bat primero.', 'error');
+    return;
+  }
+  var results = CP.clips.results;
+  if (!Object.keys(results).length) { toast('Sin videos encontrados', 'warning'); return; }
+
+  var checkedVids = new Set(
+    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
+  );
+
+  var segs = CP.clips.segs;
+  var segments = [];
+  for (var i = 0; i < segs.length; i++) {
+    var seg = segs[i];
+    var videos = results[seg.num] || [];
+    var toDownload = checkedVids.size > 0
+      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
+      : videos;
+    if (!toDownload.length) continue;
+    var safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
+    segments.push({
+      name: seg.name,
+      folder: String(seg.num).padStart(2,'0') + '_' + safeName,
+      urls: toDownload.map(function(v){ return v.id && v.id.videoId || ''; }).filter(Boolean)
+    });
+  }
+
+  if (!segments.length) { toast('Sin videos para descargar', 'warning'); return; }
+
+  fetch(SERVER + '/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(segments)
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+    toast('Descarga iniciada: ' + d.total + ' videos', 'success');
+    document.getElementById('dl-progress-panel').classList.remove('hidden');
+    startProgressPolling();
+  })
+  .catch(function(e){ toast('Error conectando al servidor: ' + e.message, 'error'); });
+}
+
+function startProgressPolling() {
+  if (_progressInterval) clearInterval(_progressInterval);
+  _progressInterval = setInterval(function(){
+    fetch(SERVER + '/progress')
+      .then(function(r){ return r.json(); })
+      .then(function(p){
+        var pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+        document.getElementById('dl-pfill').style.width = pct + '%';
+        document.getElementById('dl-progress-text').textContent =
+          p.done + '/' + p.total + ' videos' + (p.current ? ' — ' + p.current : '');
+        if (p.log && p.log.length) {
+          var logEl = document.getElementById('dl-log');
+          logEl.textContent = p.log.slice(-20).join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (p.status === 'done') {
+          clearInterval(_progressInterval);
+          document.getElementById('dl-progress-text').textContent = '✅ Descarga completa. ZIP creado en Downloads.';
+          document.getElementById('btn-open-folder').classList.remove('hidden');
+          toast('Descarga completa ✓', 'success');
+        }
+      })
+      .catch(function(){ clearInterval(_progressInterval); });
+  }, 1500);
+}
+
+function openDlFolder() {
+  fetch(SERVER + '/open-folder').catch(function(){});
+}
+
+// -- DOWNLOAD SCRIPT GENERATOR ---------------------------------
+var _dlScript = '';
+
+function genDlScript() {
+  var results = CP.clips.results;
+  if (!Object.keys(results).length) { toast('Sin videos para descargar', 'warning'); return; }
+  var checkedVids = new Set(
+    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
+  );
+  var segs = CP.clips.segs;
+  var totalVideos = 0;
+  var blocks = [];
+  for (var i = 0; i < segs.length; i++) {
+    var seg = segs[i];
+    var videos = results[seg.num] || [];
+    if (!videos.length) continue;
+    var toDownload = checkedVids.size > 0
+      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
+      : videos;
+    if (!toDownload.length) continue;
+    var safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
+    var folderName = String(seg.num).padStart(2,'0') + '_' + safeName;
+    var urls = toDownload.map(function(v){ return v.id && v.id.videoId || ''; }).filter(Boolean);
+    totalVideos += urls.length;
+    blocks.push({ folder: folderName, urls: urls, name: seg.name });
+  }
+  if (!blocks.length) { toast('Sin videos para el script', 'warning'); return; }
+
+  var L = [];
+  L.push('@echo off');
+  L.push('chcp 65001 >nul');
+  L.push('echo.');
+  L.push('echo  CRAZY PLACES - Auto-Downloader');
+  L.push('echo  ================================');
+  L.push('echo.');
+  L.push('');
+  L.push('where yt-dlp >nul 2>&1');
+  L.push('if %errorlevel% neq 0 (');
+  L.push('  if exist "%~dp0yt-dlp.exe" ( set "YD=%~dp0yt-dlp.exe" ) else (');
+  L.push('    echo ERROR: yt-dlp no encontrado.');
+  L.push('    echo Instalar: pip install yt-dlp');
+  L.push('    echo O bajar yt-dlp.exe de github.com/yt-dlp/yt-dlp/releases');
+  L.push('    pause & exit /b 1');
+  L.push('  )');
+  L.push(') else ( set "YD=yt-dlp" )');
+  L.push('');
+  L.push('mkdir crazy_places_downloads 2>nul');
+  L.push('cd crazy_places_downloads');
+  L.push('');
+
+  var folderList = [];
+  for (var b = 0; b < blocks.length; b++) {
+    var blk = blocks[b];
+    folderList.push(blk.folder);
+    L.push(':: --- ' + blk.name + ' ---');
+    L.push('mkdir "' + blk.folder + '" 2>nul');
+    for (var u = 0; u < blk.urls.length; u++) {
+      L.push('%YD% -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"' +
+        ' -o "' + blk.folder + '\\%%(title)s.%%(ext)s"' +
+        ' --no-playlist --restrict-filenames --retries 3' +
+        ' "https://www.youtube.com/watch?v=' + blk.urls[u] + '"');
+    }
+    L.push('');
+  }
+
+  L.push('cd ..');
+  L.push('echo.');
+  L.push('echo  Creando ZIP...');
+  L.push('powershell -NoProfile -Command "Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force"');
+  L.push('echo.');
+  L.push('echo  Listo. ZIP: crazy_places_downloads.zip');
+  L.push('echo.');
+  L.push('pause');
+
+  _dlScript = L.join('\r\n');
+
+  document.getElementById('dl-script-info').classList.remove('hidden');
+  document.getElementById('dl-script-summary').textContent =
+    blocks.length + ' carpetas \u00b7 ' + totalVideos + ' videos' +
+    (checkedVids.size > 0 ? ' (solo seleccionados)' : ' (todos los resultados)');
+  toast('Script .bat generado \u2713', 'success');
+}
+
+
+function downloadDlScript() {
+  if (!_dlScript) { toast('Apreta primero el boton Script yt-dlp', 'warning'); return; }
+  var blob = new Blob([_dlScript], { type: 'text/plain' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'crazy_places_download.bat';
   a.click();
   toast('Script descargado', 'success');
 }
