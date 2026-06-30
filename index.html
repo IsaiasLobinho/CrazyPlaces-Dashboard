@@ -2013,9 +2013,7 @@ async function copyTxt(text) {
   try { await navigator.clipboard.writeText(text); toast('Copiado ✓', 'success'); }
   catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Copiado ✓', 'success'); }
 }
-</script>
-</body>
-</html
+
 // -- SERVER LOCAL -----------------------------------------------
 var SERVER = 'http://localhost:8765';
 var _srvConnected = false;
@@ -2116,6 +2114,7 @@ function openDlFolder() {
   fetch(SERVER + '/open-folder').catch(function(){});
 }
 
+
 // -- DOWNLOAD SCRIPT GENERATOR ---------------------------------
 var _dlScript = '';
 
@@ -2184,7 +2183,7 @@ function genDlScript() {
   L.push('cd ..');
   L.push('echo.');
   L.push('echo  Creando ZIP...');
-  L.push('powershell -NoProfile -Command "Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force"');
+  L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
   L.push('echo.');
   L.push('echo  Listo. ZIP: crazy_places_downloads.zip');
   L.push('echo.');
@@ -2224,3 +2223,6 @@ async function copyTxt(text) {
 </script>
 </body>
 </html>
+</script>
+</body>
+</html
