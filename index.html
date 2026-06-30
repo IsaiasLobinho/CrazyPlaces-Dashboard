@@ -401,6 +401,36 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
       </div>
     </div>
     <div>
+      <!-- CONFIG PANEL -->
+      <div class="panel glass mb12" style="border-color:rgba(0,210,200,.15)">
+        <div class="pt">⚙️ Config de Descarga</div>
+        <div class="g2 mb8">
+          <div class="fg"><label>Calidad máxima</label>
+          <select id="dl-quality">
+            <option value="1080">1080p (recomendado)</option>
+            <option value="720">720p</option>
+            <option value="best">Mejor disponible</option>
+          </select></div>
+          <div class="fg"><label>Audio</label>
+          <select id="dl-audio">
+            <option value="no">Sin audio — solo video</option>
+            <option value="yes">Con audio</option>
+          </select></div>
+        </div>
+        <div class="g2 mb12">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+            <input type="checkbox" id="dl-no-av1" checked>
+            <span>Excluir AV1 <span class="muted">(para Premiere)</span></span></label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+            <input type="checkbox" id="dl-no-meta" checked>
+            <span>Sin metadatos ni descripciones</span></label>
+        </div>
+        <div class="rowc">
+          <button class="btn btn-s btn-sm" id="btn-estimate" data-action="estimate-size" disabled>📊 Estimar peso</button>
+          <span id="size-estimate" class="muted"></span>
+        </div>
+      </div>
+      <!-- ACTIONS -->
       <div class="panel glass mb12">
         <div class="pt">Acciones</div>
         <div class="row">
@@ -822,6 +852,7 @@ function setupEvents() {
       'copy-txt': () => copyTxt(el.dataset.txt),
       'save-prompt': savePrompt, 'delete-prompt': () => deletePrompt(el.dataset.id),
       'gen-dl-script': genDlScript,
+      'estimate-size': estimateSize,
       'direct-download': directDownload,
       'check-server': checkServer,
       'open-dl-folder': openDlFolder,
@@ -1197,6 +1228,7 @@ async function searchClips() {
     document.getElementById('btn-vision').disabled = false;
     document.getElementById('btn-export').disabled = false;
     document.getElementById('btn-dl-script').disabled = false;
+    document.getElementById('btn-estimate').disabled = false;
     toast('Búsqueda completada', 'success');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '▶ Buscar YouTube'; }
@@ -2043,6 +2075,246 @@ function directDownload() {
     toast('Servidor offline. Ejecuta iniciar_servidor.bat primero.', 'error');
     return;
   }
+  var segments = collectSegments();
+  if (!segments.length) { toast('Sin videos encontrados', 'warning'); return; }
+
+  if (!segments.length) { toast('Sin videos para descargar', 'warning'); return; }
+
+  var cfg = getDlConfig();
+  fetch(SERVER + '/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segments: segments, format: buildFormat(cfg), metaFlags: buildMetaFlags(cfg) })
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+    toast('Descarga iniciada: ' + d.total + ' videos', 'success');
+    document.getElementById('dl-progress-panel').classList.remove('hidden');
+    startProgressPolling();
+  })
+  .catch(function(e){ toast('Error conectando al servidor: ' + e.message, 'error'); });
+}
+
+function startProgressPolling() {
+  if (_progressInterval) clearInterval(_progressInterval);
+  _progressInterval = setInterval(function(){
+    fetch(SERVER + '/progress')
+      .then(function(r){ return r.json(); })
+      .then(function(p){
+        var pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+        document.getElementById('dl-pfill').style.width = pct + '%';
+        document.getElementById('dl-progress-text').textContent =
+          p.done + '/' + p.total + ' videos' + (p.current ? ' — ' + p.current : '');
+        if (p.log && p.log.length) {
+          var logEl = document.getElementById('dl-log');
+          logEl.textContent = p.log.slice(-20).join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (p.status === 'done') {
+          clearInterval(_progressInterval);
+          document.getElementById('dl-progress-text').textContent = '✅ Descarga completa. ZIP creado en Downloads.';
+          document.getElementById('btn-open-folder').classList.remove('hidden');
+          toast('Descarga completa ✓', 'success');
+        }
+      })
+      .catch(function(){ clearInterval(_progressInterval); });
+  }, 1500);
+}
+
+function openDlFolder() {
+  fetch(SERVER + '/open-folder').catch(function(){});
+}
+
+
+// -- DOWNLOAD CONFIG HELPERS -----------------------------------
+function getDlConfig() {
+  return {
+    quality : document.getElementById('dl-quality')?.value || '1080',
+    audio   : document.getElementById('dl-audio')?.value || 'no',
+    noAv1   : document.getElementById('dl-no-av1')?.checked !== false,
+    noMeta  : document.getElementById('dl-no-meta')?.checked !== false
+  };
+}
+
+function buildFormat(cfg) {
+  var q   = cfg.quality !== 'best' ? '[height<=' + cfg.quality + ']' : '';
+  var av1 = cfg.noAv1 ? '[vcodec!^=av01]' : '';
+  if (cfg.audio === 'no') {
+    return 'bestvideo[ext=mp4]' + q + av1 + '/bestvideo[ext=webm]' + q + av1 + '/bestvideo' + q + av1;
+  } else {
+    return 'bestvideo[ext=mp4]' + q + av1 + '+bestaudio[ext=m4a]/bestvideo' + q + av1 + '+bestaudio/best' + q + av1;
+  }
+}
+
+function buildMetaFlags(cfg) {
+  if (!cfg.noMeta) return '';
+  return ' --no-write-info-json --no-write-description --no-write-thumbnail --no-embed-metadata --no-embed-chapters';
+}
+
+function collectSegments() {
+  var results = CP.clips.results;
+  var checkedVids = new Set(
+    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
+  );
+  var segs = CP.clips.segs;
+  var segments = [];
+  for (var i = 0; i < segs.length; i++) {
+    var seg = segs[i];
+    var videos = results[seg.num] || [];
+    var toDownload = checkedVids.size > 0
+      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
+      : videos;
+    if (!toDownload.length) continue;
+    var safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
+    segments.push({
+      name: seg.name,
+      folder: String(seg.num).padStart(2,'0') + '_' + safeName,
+      urls: toDownload.map(function(v){ return v.id && v.id.videoId || ''; }).filter(Boolean)
+    });
+  }
+  return segments;
+}
+
+async function estimateSize() {
+  var segments = collectSegments();
+  if (!segments.length) { toast('Sin videos para estimar', 'warning'); return; }
+  var el = document.getElementById('size-estimate');
+  var btn = document.getElementById('btn-estimate');
+
+  if (_srvConnected) {
+    // Accurate estimate via server
+    btn.disabled = true;
+    el.textContent = 'Consultando yt-dlp...';
+    var cfg = getDlConfig();
+    var allUrls = [];
+    segments.forEach(function(s){ s.urls.forEach(function(u){ allUrls.push(u); }); });
+    try {
+      var r = await fetch(SERVER + '/estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: allUrls, format: buildFormat(cfg) })
+      });
+      var d = await r.json();
+      if (d.total_bytes > 0) {
+        var gb = (d.total_bytes / 1073741824).toFixed(2);
+        var mb = (d.total_bytes / 1048576).toFixed(0);
+        el.textContent = '≈ ' + (gb >= 1 ? gb + ' GB' : mb + ' MB') + ' (' + d.counted + '/' + allUrls.length + ' videos consultados)';
+        el.style.color = 'var(--ok)';
+      } else {
+        el.textContent = 'Sin datos de tamaño (YouTube no reporta)';
+      }
+    } catch(e) {
+      el.textContent = 'Error: ' + e.message;
+    }
+    btn.disabled = false;
+  } else {
+    // Rough estimate without server: assume ~150MB per video at 1080p no audio
+    var perVideo = { '1080': 150, '720': 80, 'best': 200 };
+    var cfg = getDlConfig();
+    var total = 0;
+    segments.forEach(function(s){ total += s.urls.length * (perVideo[cfg.quality] || 150); });
+    var gb = (total / 1024).toFixed(1);
+    el.textContent = '≈ ' + (total >= 1024 ? gb + ' GB' : total + ' MB') + ' estimado (servidor offline — dato aproximado)';
+    el.style.color = 'var(--c3)';
+  }
+}
+
+// -- DOWNLOAD SCRIPT GENERATOR ---------------------------------
+var _dlScript = '';
+
+function genDlScript() {
+  var segments = collectSegments();
+  if (!segments.length) { toast('Sin videos para el script', 'warning'); return; }
+  var cfg = getDlConfig();
+  var fmt = buildFormat(cfg);
+  var meta = buildMetaFlags(cfg);
+  var totalVideos = segments.reduce(function(s,b){ return s + b.urls.length; }, 0);
+
+  var L = [];
+  L.push('@echo off');
+  L.push('chcp 65001 >nul');
+  L.push('echo.');
+  L.push('echo  CRAZY PLACES - Auto-Downloader');
+  L.push('echo  Formato: ' + fmt.slice(0,60));
+  L.push('echo  Audio: ' + (cfg.audio === 'no' ? 'NO' : 'SI') + '  AV1: ' + (cfg.noAv1 ? 'EXCLUIDO' : 'PERMITIDO') + '  Meta: ' + (cfg.noMeta ? 'NO' : 'SI'));
+  L.push('echo  Total: ' + totalVideos + ' videos en ' + segments.length + ' carpetas');
+  L.push('echo.');
+  L.push('');
+  L.push('where yt-dlp >nul 2>&1');
+  L.push('if %errorlevel% neq 0 (');
+  L.push('  if exist "%~dp0yt-dlp.exe" ( set "YD=%~dp0yt-dlp.exe" ) else (');
+  L.push('    echo ERROR: yt-dlp no encontrado. Instalar: pip install yt-dlp');
+  L.push('    pause & exit /b 1');
+  L.push('  )');
+  L.push(') else ( set "YD=yt-dlp" )');
+  L.push('');
+  L.push(':: Actualizar yt-dlp para evitar errores 403');
+  L.push('%YD% -U');
+  L.push('');
+  L.push('mkdir crazy_places_downloads 2>nul');
+  L.push('cd crazy_places_downloads');
+  L.push('');
+
+  for (var b = 0; b < segments.length; b++) {
+    var blk = segments[b];
+    L.push(':: --- ' + blk.name + ' (' + blk.urls.length + ' videos) ---');
+    L.push('mkdir "' + blk.folder + '" 2>nul');
+    for (var u = 0; u < blk.urls.length; u++) {
+      L.push('%YD% -f "' + fmt + '"' +
+        ' -o "' + blk.folder + '\\%%(title)s.%%(ext)s"' +
+        ' --no-playlist --restrict-filenames --retries 3' +
+        meta +
+        ' "https://www.youtube.com/watch?v=' + blk.urls[u] + '"');
+    }
+    L.push('');
+  }
+
+  L.push('cd ..');
+  L.push('echo.');
+  L.push('echo  Creando ZIP...');
+  L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
+  L.push('echo.');
+  L.push('echo  Listo. ZIP: crazy_places_downloads.zip');
+  L.push('echo.');
+  L.push('pause');
+
+  _dlScript = L.join('\r\n');
+  document.getElementById('dl-script-info').classList.remove('hidden');
+  document.getElementById('dl-script-summary').textContent =
+    segments.length + ' carpetas \u00b7 ' + totalVideos + ' videos \u00b7 ' + (cfg.audio==='no'?'sin audio':'con audio') + ' \u00b7 ' + (cfg.noAv1?'sin AV1':'todos formatos');
+  toast('Script .bat generado \u2713', 'success');
+}
+
+// -- SERVER LOCAL -----------------------------------------------
+var SERVER = 'http://localhost:8765';
+var _srvConnected = false;
+var _progressInterval = null;
+
+function checkServer() {
+  fetch(SERVER + '/status', { signal: AbortSignal.timeout(1500) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      _srvConnected = true;
+      document.getElementById('srv-dot').className = 'dot ok';
+      document.getElementById('srv-label').textContent = 'Servidor ✓';
+      var btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.remove('hidden');
+    })
+    .catch(function(){
+      _srvConnected = false;
+      document.getElementById('srv-dot').className = 'dot err';
+      document.getElementById('srv-label').textContent = 'Servidor offline';
+      var btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.add('hidden');
+    });
+}
+
+function directDownload() {
+  if (!_srvConnected) {
+    toast('Servidor offline. Ejecuta iniciar_servidor.bat primero.', 'error');
+    return;
+  }
   var results = CP.clips.results;
   if (!Object.keys(results).length) { toast('Sin videos encontrados', 'warning'); return; }
 
@@ -2069,10 +2341,11 @@ function directDownload() {
 
   if (!segments.length) { toast('Sin videos para descargar', 'warning'); return; }
 
+  var cfg = getDlConfig();
   fetch(SERVER + '/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(segments)
+    body: JSON.stringify({ segments: segments, format: buildFormat(cfg), metaFlags: buildMetaFlags(cfg) })
   })
   .then(function(r){ return r.json(); })
   .then(function(d){
