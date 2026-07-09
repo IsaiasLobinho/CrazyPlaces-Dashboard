@@ -1033,32 +1033,44 @@ function isReal(video) {
 async function ai33Gen(text, voiceId) {
   const key = CP.cfg.ai33_key;
   if (!key) throw new Error('AI33 key no configurada');
-  const res = await fetch('https://api.ai33.pro/generate', {
+  const speed = parseFloat(document.getElementById('v-speed')?.value || 1);
+  const fd = new FormData();
+  fd.append('text', text);
+  fd.append('voice_id', voiceId);
+  fd.append('speed', Math.min(1.5, Math.max(0.5, speed)).toString());
+  fd.append('with_transcript', 'false');
+  const res = await fetch('https://api.ai33.pro/v3/text-to-speech', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({
-      text, voice_id: voiceId,
-      speed_factor: parseFloat(document.getElementById('v-speed')?.value || 1),
-      stability: parseFloat(document.getElementById('v-stab')?.value || 0.5),
-      similarity_boost: parseFloat(document.getElementById('v-sim')?.value || 0.75),
-      style: parseFloat(document.getElementById('v-style')?.value || 0.3),
-      use_speaker_boost: document.getElementById('v-boost')?.checked ?? true
-    })
+    headers: { 'xi-api-key': key },
+    body: fd
   });
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || 'AI33 error'); }
-  return (await res.json()).task_id;
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.message || e.error || `AI33 error ${res.status}`);
+  }
+  const d = await res.json();
+  if (!d.success) throw new Error(d.message || 'AI33: success=false');
+  return d.task_id;
 }
 
 async function ai33Poll(taskId) {
   const key = CP.cfg.ai33_key;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 90; i++) {
     await sleep(2000);
-    const r = await fetch(`https://api.ai33.pro/task/${taskId}`, { headers: { 'Authorization': `Bearer ${key}` } });
+    const r = await fetch(`https://api.ai33.pro/v1/task/${taskId}`, {
+      headers: { 'xi-api-key': key }
+    });
+    if (!r.ok) { await sleep(2000); continue; }
     const d = await r.json();
-    if (d.status === 'completed') return d.audio_url;
-    if (d.status === 'failed') throw new Error('AI33 task failed');
+    if (d.status === 'done') {
+      const url = d.metadata?.audio_url;
+      if (!url) throw new Error('AI33: task done pero sin audio_url');
+      return url;
+    }
+    if (d.status === 'failed') throw new Error('AI33 task failed: ' + (d.error_message || ''));
+    // status: 'doing' o 'pending' — seguir esperando
   }
-  throw new Error('AI33 timeout (120s)');
+  throw new Error('AI33 timeout (3 minutos)');
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1101,7 +1113,11 @@ async function checkApis() {
   // AI33
   try {
     if (!CP.cfg.ai33_key) throw new Error();
-    const r = await fetch('https://api.ai33.pro/credits', { headers: { 'Authorization': `Bearer ${CP.cfg.ai33_key}` } });
+    const r = await fetch('https://api.ai33.pro/v1/health-check', {
+      headers: { 'xi-api-key': CP.cfg.ai33_key }
+    });
+    document.getElementById('dot-ai33').className = r.ok ? 'dot ok' : 'dot err';
+  } catch { document.getElementById('dot-ai33').className = 'dot err'; }` } });
     document.getElementById('dot-ai33').className = r.ok ? 'dot ok' : 'dot err';
   } catch { document.getElementById('dot-ai33').className = 'dot err'; }
   toast('Verificación completa', 'success');
@@ -1783,10 +1799,13 @@ async function refreshCredits() {
   const key = CP.cfg.ai33_key;
   if (!key) { toast('AI33 key no configurada', 'warning'); return; }
   try {
-    const r = await fetch('https://api.ai33.pro/credits', { headers: { 'Authorization': `Bearer ${key}` } });
+    const r = await fetch('https://api.ai33.pro/v1/credits', {
+      headers: { 'xi-api-key': key }
+    });
     const d = await r.json();
-    document.getElementById('cr-ai33').textContent = d.credits ?? d.remaining ?? '?';
-  } catch (e) { toast('Error: ' + e.message, 'error'); }
+    const amount = d.credits ?? d.ec_remain_credits ?? d.remaining ?? '?';
+    document.getElementById('cr-ai33').textContent = amount;
+  } catch (e) { toast('Error créditos AI33: ' + e.message, 'error'); }
 }
 
 async function dlZip() {
