@@ -721,16 +721,12 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// ┌────────────────────────────────────────────────────────────┐
-// │  CRAZY PLACES — DASHBOARD v1.0                             │
-// │  Reemplazá SUPABASE_URL y SUPABASE_ANON_KEY abajo         │
-// └────────────────────────────────────────────────────────────┘
+// CRAZY PLACES — Dashboard v1.0
 // ══════════════════════════════════════════════════════════════
 
-const SUPABASE_URL  = 'https://oygvjhmmqsqjndybfvct.supabase.co';
-const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z3ZqaG1tcXNxam5keWJmdmN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NjY4MTYsImV4cCI6MjA5ODI0MjgxNn0.wFLVA6BSwzt0z_JTHYP_lr8bwXVnGVxEkDNByKZye4U';
+const SUPABASE_URL = localStorage.getItem('cp_sb_url') || 'https://oygvjhmmqsqjndybfvct.supabase.co';
+const SUPABASE_KEY = localStorage.getItem('cp_sb_key') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z3ZqaG1tcXNxam5keWJmdmN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NjY4MTYsImV4cCI6MjA5ODI0MjgxNn0.wFLVA6BSwzt0z_JTHYP_lr8bwXVnGVxEkDNByKZye4U';
 
-// ── ESTADO GLOBAL ────────────────────────────────────────────
 const CP = {
   sb: null, user: null, prof: null, cfg: {}, sec: 'home',
   clips: { segs: [], results: {}, sel: new Set() },
@@ -740,13 +736,9 @@ const CP = {
   prompts: []
 };
 
-// ── INIT ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  // setupEvents SIEMPRE primero — si Supabase falla los botones igual responden
   setupEvents();
-
   try {
-    // Credenciales configuradas
     CP.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     const { data: { session } } = await CP.sb.auth.getSession();
     if (session) { CP.user = session.user; await postLogin(); }
@@ -761,7 +753,7 @@ async function doLogin() {
   const email = document.getElementById('l-email').value.trim();
   const pass  = document.getElementById('l-pass').value;
   if (!email || !pass) { toast('Completá email y contraseña', 'warning'); return; }
-  if (!CP.sb) { toast('Supabase no inicializado. Verificá la URL y key en el código.', 'error'); return; }
+  if (!CP.sb) { toast('Supabase no inicializado', 'error'); return; }
   const btn = document.getElementById('l-btn');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Ingresando...';
   try {
@@ -852,11 +844,11 @@ function setupEvents() {
       'copy-txt': () => copyTxt(el.dataset.txt),
       'save-prompt': savePrompt, 'delete-prompt': () => deletePrompt(el.dataset.id),
       'gen-dl-script': genDlScript,
-      'estimate-size': estimateSize,
+      'download-dl-script': downloadDlScript,
       'direct-download': directDownload,
       'check-server': checkServer,
       'open-dl-folder': openDlFolder,
-      'download-dl-script': downloadDlScript,
+      'estimate-size': estimateSize,
       'create-user': createUser, 'reload-users': loadUsers,
       'toggle-user': () => toggleUser(el.dataset.id, el.dataset.dis === 'true'),
       'change-role': () => changeRole(el.dataset.id, el.dataset.role),
@@ -866,7 +858,6 @@ function setupEvents() {
     if (fn) await fn();
   });
 
-  // Tabs
   document.addEventListener('click', e => {
     const tb = e.target.closest('.tb[data-tab]');
     if (!tb) return;
@@ -874,14 +865,12 @@ function setupEvents() {
     if (!tg) return;
     const tabsCont = tb.closest('[data-tg]');
     if (tabsCont) tabsCont.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));
-    else document.querySelectorAll(`.tb[data-tg="${tg}"]`).forEach(b => b.classList.remove('active'));
     document.querySelectorAll(`.tg-${tg}`).forEach(p => p.classList.remove('active'));
     tb.classList.add('active');
     const pane = document.getElementById(tb.dataset.tab);
     if (pane) pane.classList.add('active');
   });
 
-  // Sliders
   document.addEventListener('input', e => {
     if (e.target.type === 'range') {
       const v = document.getElementById(e.target.id + '-v');
@@ -889,14 +878,18 @@ function setupEvents() {
     }
   });
 
-  // Login enter
   document.getElementById('l-pass')?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-
-  // Ideas filter
   document.getElementById('id-filter')?.addEventListener('change', renderSavedIdeas);
+  document.addEventListener('change', e => {
+    const el = e.target;
+    if (el.dataset.action === 'select-clip') {
+      if (el.checked) CP.clips.sel.add(el.dataset.url);
+      else CP.clips.sel.delete(el.dataset.url);
+    }
+  });
 }
 
-// ── TOAST ────────────────────────────────────────────────────
+// ── TOAST / MODAL ────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const tc = document.getElementById('tc');
   const t = document.createElement('div');
@@ -904,8 +897,6 @@ function toast(msg, type = 'info') {
   tc.appendChild(t);
   setTimeout(() => t.remove(), 3800);
 }
-
-// ── MODAL ────────────────────────────────────────────────────
 function openMo(id) { document.getElementById(id)?.classList.add('open'); }
 function closeMo(id) { document.getElementById(id)?.classList.remove('open'); }
 
@@ -915,6 +906,10 @@ function openCfg() {
   f('c-ant','anthropic_key'); f('c-yt','youtube_key'); f('c-ai33','ai33_key');
   f('c-adm','admin_email'); f('c-ves','voice_es'); f('c-ven','voice_en');
   f('c-boiler','desc_boilerplate'); f('c-svc','supabase_svc');
+  const sbUrlEl = document.getElementById('c-sburl');
+  const sbKeyEl = document.getElementById('c-sbanonk');
+  if (sbUrlEl) sbUrlEl.value = localStorage.getItem('cp_sb_url') || SUPABASE_URL;
+  if (sbKeyEl) sbKeyEl.value = localStorage.getItem('cp_sb_key') || '';
   renderPromptsCfg();
   openMo('mo-cfg');
 }
@@ -944,7 +939,6 @@ async function loadPrompts() {
   CP.prompts = data || [];
   updatePromptSelectors();
 }
-
 function updatePromptSelectors() {
   const sel = document.getElementById('scr-psel');
   if (!sel) return;
@@ -956,25 +950,21 @@ function updatePromptSelectors() {
   });
   if (cur) sel.value = cur;
 }
-
 function renderDashPrompts() {
   const el = document.getElementById('dash-prompts');
   if (!el) return;
   if (!CP.prompts.length) { el.innerHTML = '<span class="muted">Sin prompts. Configurá en ⚙️</span>'; return; }
   el.innerHTML = CP.prompts.map(p => `<div class="rowc mb8"><span>📄 ${esc(p.name)}</span></div>`).join('');
 }
-
 function renderPromptsCfg() {
   const el = document.getElementById('prompts-cfg-list');
   if (!el) return;
   if (!CP.prompts.length) { el.innerHTML = '<span class="muted">Sin prompts guardados</span>'; return; }
   el.innerHTML = '<hr class="hr">' + CP.prompts.map(p =>
-    `<div class="rowc mb8">
-      <span class="muted" style="flex:1">${esc(p.name)}</span>
-      <button class="btn btn-d btn-sm" data-action="delete-prompt" data-id="${p.id}">🗑️</button>
-    </div>`).join('');
+    `<div class="rowc mb8"><span class="muted" style="flex:1">${esc(p.name)}</span>` +
+    `<button class="btn btn-d btn-sm" data-action="delete-prompt" data-id="${p.id}">🗑️</button></div>`
+  ).join('');
 }
-
 async function savePrompt() {
   const name = document.getElementById('c-pname').value.trim();
   const content = document.getElementById('c-pcontent').value.trim();
@@ -986,14 +976,12 @@ async function savePrompt() {
   await loadPrompts(); renderPromptsCfg();
   toast('Prompt guardado', 'success');
 }
-
 async function deletePrompt(id) {
   if (!confirm('¿Eliminar este prompt?')) return;
   await CP.sb.from('prompts').delete().eq('id', id);
   await loadPrompts(); renderPromptsCfg();
   toast('Prompt eliminado', 'info');
 }
-
 function loadPromptToScript() {
   const sel = document.getElementById('scr-psel').value;
   if (sel === 'default') return;
@@ -1007,7 +995,12 @@ async function callClaude(messages, system, maxTok = 1000) {
   if (!key) throw new Error('Anthropic key no configurada. Ir a ⚙️');
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
     body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok, system, messages })
   });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `Claude ${res.status}`); }
@@ -1021,18 +1014,18 @@ async function ytSearch(query, maxRes = 10) {
   const p = new URLSearchParams({ part: 'snippet', q: query, maxResults: maxRes, type: 'video', videoDuration: 'medium', key });
   const res = await fetch(`https://www.googleapis.com/youtube/v3/search?${p}`);
   if (!res.ok) throw new Error(`YouTube ${res.status}`);
-  const d = await res.json();
-  return d.items || [];
+  return (await res.json()).items || [];
 }
 
 function isReal(video) {
   const s = ((video.snippet?.title || '') + ' ' + (video.snippet?.description || '') + ' ' + (video.snippet?.channelTitle || '')).toLowerCase();
-  return !['minecraft','roblox','gta','fortnite','simulation','simulator','gameplay','animation','animated','cartoon','disney','pixar','toy','lego','ai generated','#shorts','short film','fake','unreal'].some(w => s.includes(w));
+  return !['minecraft','roblox','gta','fortnite','simulation','simulator','gameplay','animation','animated','cartoon','disney','pixar','toy','lego','ai generated','#shorts'].some(w => s.includes(w));
 }
 
+// ── AI33 TTS (v3 API — xi-api-key + FormData) ────────────────
 async function ai33Gen(text, voiceId) {
   const key = CP.cfg.ai33_key;
-  if (!key) throw new Error('AI33 key no configurada');
+  if (!key) throw new Error('AI33 key no configurada. Ir a ⚙️');
   const speed = parseFloat(document.getElementById('v-speed')?.value || 1);
   const fd = new FormData();
   fd.append('text', text);
@@ -1064,13 +1057,12 @@ async function ai33Poll(taskId) {
     const d = await r.json();
     if (d.status === 'done') {
       const url = d.metadata?.audio_url;
-      if (!url) throw new Error('AI33: task done pero sin audio_url');
+      if (!url) throw new Error('AI33: done pero sin audio_url');
       return url;
     }
     if (d.status === 'failed') throw new Error('AI33 task failed: ' + (d.error_message || ''));
-    // status: 'doing' o 'pending' — seguir esperando
   }
-  throw new Error('AI33 timeout (3 minutos)');
+  throw new Error('AI33 timeout (3 min)');
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1096,30 +1088,27 @@ async function loadDash() {
 function updateApiDots() {
   const has = k => !!CP.cfg[k];
   document.getElementById('dot-ant').className = 'dot ' + (has('anthropic_key') ? 'ok' : 'err');
-  document.getElementById('dot-yt').className  = 'dot ' + (has('youtube_key')   ? 'ok' : 'err');
-  document.getElementById('dot-ai33').className = 'dot ' + (has('ai33_key')     ? 'ok' : 'err');
+  document.getElementById('dot-yt').className  = 'dot ' + (has('youtube_key') ? 'ok' : 'err');
+  document.getElementById('dot-ai33').className = 'dot ' + (has('ai33_key') ? 'ok' : 'err');
 }
 
 async function checkApis() {
   toast('Verificando APIs...', 'info');
-  // Anthropic
   try {
     await callClaude([{ role: 'user', content: 'hi' }], 'Reply: ok', 10);
     document.getElementById('dot-ant').className = 'dot ok';
-  } catch { document.getElementById('dot-ant').className = 'dot err'; }
-  // YouTube
-  try { await ytSearch('test', 1); document.getElementById('dot-yt').className = 'dot ok'; }
-  catch { document.getElementById('dot-yt').className = 'dot err'; }
-  // AI33
+  } catch(e) { document.getElementById('dot-ant').className = 'dot err'; }
   try {
-    if (!CP.cfg.ai33_key) throw new Error();
+    await ytSearch('test', 1);
+    document.getElementById('dot-yt').className = 'dot ok';
+  } catch(e) { document.getElementById('dot-yt').className = 'dot err'; }
+  try {
+    if (!CP.cfg.ai33_key) throw new Error('no key');
     const r = await fetch('https://api.ai33.pro/v1/health-check', {
       headers: { 'xi-api-key': CP.cfg.ai33_key }
     });
     document.getElementById('dot-ai33').className = r.ok ? 'dot ok' : 'dot err';
-  } catch { document.getElementById('dot-ai33').className = 'dot err'; }` } });
-    document.getElementById('dot-ai33').className = r.ok ? 'dot ok' : 'dot err';
-  } catch { document.getElementById('dot-ai33').className = 'dot err'; }
+  } catch(e) { document.getElementById('dot-ai33').className = 'dot err'; }
   toast('Verificación completa', 'success');
 }
 
@@ -1130,15 +1119,13 @@ const SEGS_RX = [
   /^(?:LUGAR|PLACE|PUESTO|TOP|SECCIÓN|SECTION|RANK)\s+(\d+)\s*[:.-]?\s*(.*)/i,
   /^(\d+)[.)]\s+(.*)/
 ];
-
 function isAllCapsHeader(line) {
   const t = line.trim();
   if (t.length < 4 || t.length > 80) return false;
-  if (t.startsWith('//') || t.startsWith('--') || t.startsWith('/*')) return false;
+  if (/^[-=*_]{2,}$/.test(t) || t.length < 4) return false;
   const letters = t.replace(/[^a-zA-Z]/g, '');
   if (letters.length < 3) return false;
-  const upperRatio = (t.replace(/[^A-Z]/g, '').length) / letters.length;
-  return upperRatio >= 0.85; // 85%+ uppercase letters
+  return (t.replace(/[^A-Z]/g, '').length / letters.length) >= 0.85;
 }
 
 function detectClipSegs() {
@@ -1146,36 +1133,21 @@ function detectClipSegs() {
   if (!text) { toast('Pegá un guión o lista de lugares', 'warning'); return; }
   const lines = text.split('\n');
   const segs = [];
-
-  // Pass 1: try numbered regex patterns
   for (const line of lines) {
     const t = line.trim();
     for (const rx of SEGS_RX) {
       const m = t.match(rx);
-      if (m) {
-        const name = (m[2] || '').replace(/\*+/g, '').trim();
-        if (name.length > 2) { segs.push({ num: parseInt(m[1]), name }); }
-        break;
-      }
+      if (m) { const name = (m[2] || '').replace(/\*+/g, '').trim(); if (name.length > 2) segs.push({ num: parseInt(m[1]), name }); break; }
     }
   }
-
-  // Pass 2: if no numbered segs found, detect ALL-CAPS headers
   if (!segs.length) {
     let counter = 0;
     for (const line of lines) {
       const t = line.trim();
-      // Skip separator lines and very short lines
       if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
-      if (isAllCapsHeader(t)) {
-        counter++;
-        // Clean trailing punctuation
-        const name = t.replace(/[.:,;!?]+$/, '').trim();
-        segs.push({ num: counter, name });
-      }
+      if (isAllCapsHeader(t)) { counter++; segs.push({ num: counter, name: t.replace(/[.:,;!?]+$/, '').trim() }); }
     }
   }
-
   if (!segs.length) { detectSegsAI(text); return; }
   CP.clips.segs = segs;
   renderClipSegs();
@@ -1203,11 +1175,12 @@ function renderClipSegs() {
   const list  = document.getElementById('clips-segs-list');
   panel.classList.remove('hidden');
   list.innerHTML = CP.clips.segs.map((s, i) =>
-    `<div class="rowc mb8">
-      <span class="cc1 mono">[${s.num}]</span>
-      <span style="flex:1;padding:0 8px">${esc(s.name)}</span>
-      <button class="btn btn-d btn-sm" data-action="remove-seg" data-idx="${i}">✕</button>
-    </div>`).join('');
+    `<div class="rowc mb8">` +
+    `<span class="cc1 mono">[${s.num}]</span>` +
+    `<span style="flex:1;padding:0 8px">${esc(s.name)}</span>` +
+    `<button class="btn btn-d btn-sm" data-action="remove-seg" data-idx="${i}">✕</button>` +
+    `</div>`
+  ).join('');
 }
 
 async function searchClips() {
@@ -1218,8 +1191,7 @@ async function searchClips() {
     const segList = CP.clips.segs.map(s => `[${s.num}] ${s.name}`).join('\n');
     const qt = await callClaude(
       [{ role: 'user', content: `Para estos lugares de un documental de Crazy Places, genera 4 queries de YouTube por lugar (inglés, de específico a general). Solo footage REAL, cinematográfico, sin videojuegos ni animación.\n\n${segList}\n\nJSON: [{"num":1,"queries":["q1","q2","q3","q4"]},...]` }],
-      'Generas queries de YouTube para footage documental real. Solo JSON.',
-      1200
+      'Generas queries de YouTube para footage documental real. Solo JSON.', 1200
     );
     const queries = JSON.parse(qt.replace(/```json|```/g, '').trim());
     btn.innerHTML = '<span class="spin"></span> Buscando en YouTube...';
@@ -1251,33 +1223,20 @@ async function searchClips() {
 }
 
 function renderClipBlock(num, name, videos) {
-  return `<div class="mb16">
-    <div class="pt mb8">📍 [${num}] ${esc(name)}</div>
-    ${videos.map(v => {
+  return `<div class="mb16"><div class="pt mb8">📍 [${num}] ${esc(name)}</div>` +
+    videos.map(v => {
       const vid = v.id?.videoId || '';
       const title = v.snippet?.title || '';
       const ch = v.snippet?.channelTitle || '';
       const thumb = v.snippet?.thumbnails?.medium?.url || '';
-      return `<div class="rc glass" data-vid="${vid}">
-        <input type="checkbox" data-action="select-clip" data-vid="${vid}" data-url="https://youtu.be/${vid}">
-        <img class="rc-thumb" src="${thumb}" alt="" loading="lazy">
-        <div class="rc-body">
-          <div class="rc-title">${esc(title)}</div>
-          <div class="rc-meta">${esc(ch)} · <a href="https://youtu.be/${vid}" target="_blank" class="cc1">youtu.be/${vid}</a></div>
-          <div class="rc-acts"><span class="badge b-pending" id="vrd-${vid}">—</span></div>
-        </div>
-      </div>`;
-    }).join('')}
-  </div>`;
+      return `<div class="rc glass" data-vid="${vid}">` +
+        `<input type="checkbox" data-action="select-clip" data-vid="${vid}" data-url="https://youtu.be/${vid}">` +
+        `<img class="rc-thumb" src="${thumb}" alt="" loading="lazy">` +
+        `<div class="rc-body"><div class="rc-title">${esc(title)}</div>` +
+        `<div class="rc-meta">${esc(ch)} · <a href="https://youtu.be/${vid}" target="_blank" class="cc1">youtu.be/${vid}</a></div>` +
+        `<div class="rc-acts"><span class="badge b-pending" id="vrd-${vid}">—</span></div></div></div>`;
+    }).join('') + '</div>';
 }
-
-document.addEventListener('change', e => {
-  const el = e.target;
-  if (el.dataset.action === 'select-clip') {
-    const url = el.dataset.url;
-    if (el.checked) CP.clips.sel.add(url); else CP.clips.sel.delete(url);
-  }
-});
 
 async function analyzeVision() {
   const cards = document.querySelectorAll('.rc[data-vid]');
@@ -1285,11 +1244,7 @@ async function analyzeVision() {
   const btn = document.getElementById('btn-vision');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Analizando...';
   try {
-    const list = Array.from(cards).slice(0, 16).map((c, i) => {
-      const vid = c.dataset.vid;
-      const title = c.querySelector('.rc-title')?.textContent || '';
-      return `${i+1}. ID:${vid} Título:"${title}"`;
-    }).join('\n');
+    const list = Array.from(cards).slice(0,16).map((c,i) => `${i+1}. ID:${c.dataset.vid} Título:"${c.querySelector('.rc-title')?.textContent||''}"`).join('\n');
     const r = await callClaude(
       [{ role: 'user', content: `Analizá estos videos para un documental de LUGARES EXTREMOS. Por título, clasificá:\n\n${list}\n\nJSON: [{"vid":"id","verdict":"USAR|REVISAR|DESCARTAR","reason":"breve"},...]\nUSAR = footage real útil, REVISAR = posible, DESCARTAR = no sirve.` }],
       'Experto en footage documental. Solo JSON válido.', 1200
@@ -1309,9 +1264,7 @@ async function analyzeVision() {
 function exportLinks() {
   const checked = document.querySelectorAll('.rc input[type=checkbox]:checked');
   let links = Array.from(checked).map(cb => cb.dataset.url);
-  if (!links.length) {
-    links = Array.from(document.querySelectorAll('.rc[data-vid]')).map(c => `https://youtu.be/${c.dataset.vid}`);
-  }
+  if (!links.length) links = Array.from(document.querySelectorAll('.rc[data-vid]')).map(c => `https://youtu.be/${c.dataset.vid}`);
   const blob = new Blob([links.join('\n')], { type: 'text/plain' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'crazy-places-clips.txt'; a.click();
@@ -1323,7 +1276,7 @@ const PROMPT_ES = `Sos un guionista cinematográfico especializado en documental
 
 REGLAS ABSOLUTAS:
 — Narración pura y corrida. CERO marcadores estructurales como "NARRADOR:", "SEGMENTO:", "SECCIÓN:", "LUGAR 1:", etc.
-— Solo los marcadores numéricos [N] al inicio exacto de cada nuevo lugar, sin ningún texto adicional en esa línea.
+— Solo los marcadores numéricos [N] al inicio exacto de cada nuevo lugar, con ningún texto adicional en esa línea.
 — Tono: cinematográfico, evocador, tenso cuando corresponde, siempre fascinante.
 — Incluí datos reales: coordenadas, temperaturas, altitudes, fechas históricas.
 — Apertura dramática → desarrollo con datos → cierre con giro o reflexión, por cada lugar.
@@ -1336,7 +1289,6 @@ ABSOLUTE RULES:
 — Only numeric markers [N] at the exact start of each new place, with no additional text on that line.
 — Tone: cinematic, evocative, tense when appropriate, always fascinating.
 — Include real data: coordinates, temperatures, altitudes, historical dates.
-— Dramatic opening → data-rich development → twist or reflection at close, per place.
 — Target length: 15,000 to 18,000 characters.`;
 
 async function genScript() {
@@ -1354,8 +1306,7 @@ async function genScript() {
       : `Write a cinematic script about: "${topic}"\nSections/places: ${n}. Use markers [1] to [${n}] at the start of each place.\n${extra ? 'Instructions: ' + extra : ''}`;
     const script = await callClaude([{ role: 'user', content: user }], sys, 8000);
     CP.scripts.own = script;
-    document.getElementById('scr-output').innerHTML =
-      `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;color:var(--t2);max-height:480px;overflow-y:auto">${esc(script)}</div>`;
+    document.getElementById('scr-output').innerHTML = `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;color:var(--t2);max-height:480px;overflow-y:auto">${esc(script)}</div>`;
     document.getElementById('scr-chars').textContent = script.length.toLocaleString() + ' chars';
     document.getElementById('btn-save-scr').disabled = false;
     document.getElementById('btn-to-v-own').disabled = false;
@@ -1378,8 +1329,7 @@ async function genScriptRef() {
       : `Use this transcript as structural reference to create an ORIGINAL script about a different extreme place. Don't copy content, only adapt narrative structure.\n\nREFERENCE:\n${ref.slice(0,4000)}\n\n${extra ? 'Instructions: ' + extra : ''}\n\nUse markers [1], [2], etc. for each section.`;
     const script = await callClaude([{ role: 'user', content: user }], sys, 8000);
     CP.scripts.ref = script;
-    document.getElementById('scr-ref-output').innerHTML =
-      `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;color:var(--t2);max-height:480px;overflow-y:auto">${esc(script)}</div>`;
+    document.getElementById('scr-ref-output').innerHTML = `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;color:var(--t2);max-height:480px;overflow-y:auto">${esc(script)}</div>`;
     document.getElementById('scr-ref-chars').textContent = script.length.toLocaleString() + ' chars';
     document.getElementById('btn-save-ref').disabled = false;
     document.getElementById('btn-to-v-ref').disabled = false;
@@ -1405,18 +1355,15 @@ async function loadSavedScripts() {
   if (!el) return;
   if (!CP.scripts.saved.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">Sin guiones guardados</div></div>'; return; }
   el.innerHTML = CP.scripts.saved.map(s =>
-    `<div class="panel glass mb12">
-      <div class="rowc mb8">
-        <strong style="flex:1">${esc(s.title || 'Sin título')}</strong>
-        <span class="badge b-${s.status || 'draft'}">${s.status || 'draft'}</span>
-        <span class="muted" style="margin-left:8px">${new Date(s.created_at).toLocaleDateString('es-AR')}</span>
-      </div>
-      <div class="muted mb8" style="font-size:11px;line-height:1.5;max-height:54px;overflow:hidden">${esc((s.content||'').slice(0,200))}...</div>
-      <div class="row">
-        <button class="btn btn-v btn-sm" data-action="send-to-voices" data-which="saved:${s.id}">🎙️ Voces</button>
-        <button class="btn btn-d btn-sm" data-action="delete-script" data-id="${s.id}">🗑️</button>
-      </div>
-    </div>`).join('');
+    `<div class="panel glass mb12">` +
+    `<div class="rowc mb8"><strong style="flex:1">${esc(s.title||'Sin título')}</strong>` +
+    `<span class="badge b-${s.status||'draft'}">${s.status||'draft'}</span>` +
+    `<span class="muted" style="margin-left:8px">${new Date(s.created_at).toLocaleDateString('es-AR')}</span></div>` +
+    `<div class="muted mb8" style="font-size:11px;max-height:54px;overflow:hidden">${esc((s.content||'').slice(0,200))}...</div>` +
+    `<div class="row">` +
+    `<button class="btn btn-v btn-sm" data-action="send-to-voices" data-which="saved:${s.id}">🎙️ Voces</button>` +
+    `<button class="btn btn-d btn-sm" data-action="delete-script" data-id="${s.id}">🗑️</button></div></div>`
+  ).join('');
 }
 
 async function deleteScript(id) {
@@ -1430,10 +1377,7 @@ function sendToVoices(which) {
   let content = '';
   if (which === 'own') content = CP.scripts.own;
   else if (which === 'ref') content = CP.scripts.ref;
-  else if (which?.startsWith('saved:')) {
-    const id = which.split(':')[1];
-    content = CP.scripts.saved.find(s => s.id === id)?.content || '';
-  }
+  else if (which?.startsWith('saved:')) content = CP.scripts.saved.find(s => s.id === which.split(':')[1])?.content || '';
   if (!content) { toast('Sin guión para enviar', 'warning'); return; }
   document.getElementById('v-script').value = content;
   showSec('voices');
@@ -1461,14 +1405,11 @@ async function genIdeas() {
     CP.ideas.gen = JSON.parse(r.replace(/```json|```/g, '').trim());
     const el = document.getElementById('id-gen-list');
     el.innerHTML = CP.ideas.gen.map((idea, i) =>
-      `<div class="rc glass mb8">
-        <input type="checkbox" class="idea-chk" data-idx="${i}">
-        <div class="rc-body">
-          <div class="rc-title">${esc(idea.title)}</div>
-          <div class="rc-meta">${esc(idea.desc || '')}</div>
-        </div>
-        <button class="btn btn-s btn-sm" data-action="idea-to-script" data-title="${escA(idea.title)}">📝</button>
-      </div>`).join('');
+      `<div class="rc glass mb8"><input type="checkbox" class="idea-chk" data-idx="${i}">` +
+      `<div class="rc-body"><div class="rc-title">${esc(idea.title)}</div>` +
+      `<div class="rc-meta">${esc(idea.desc||'')}</div></div>` +
+      `<button class="btn btn-s btn-sm" data-action="idea-to-script" data-title="${escA(idea.title)}">📝</button></div>`
+    ).join('');
     document.getElementById('btn-save-ideas').disabled = false;
     toast(`${CP.ideas.gen.length} ideas generadas`, 'success');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
@@ -1480,9 +1421,7 @@ async function saveIdeas() {
   if (!checks.length) { toast('Seleccioná al menos una idea', 'warning'); return; }
   const toSave = Array.from(checks).map(cb => CP.ideas.gen[parseInt(cb.dataset.idx)]).filter(Boolean);
   try {
-    for (const idea of toSave) {
-      await CP.sb.from('ideas').insert({ title: idea.title, category: idea.desc || '', source: 'generated', status: 'pending', created_by: CP.user.id });
-    }
+    for (const idea of toSave) await CP.sb.from('ideas').insert({ title: idea.title, category: idea.desc||'', source: 'generated', status: 'pending', created_by: CP.user.id });
     toast(`${toSave.length} ideas guardadas`, 'success');
     await loadIdeas();
   } catch (e) { toast('Error: ' + e.message, 'error'); }
@@ -1506,17 +1445,13 @@ async function searchComp() {
       const thumb = v.snippet?.thumbnails?.medium?.url || '';
       const pub = v.snippet?.publishedAt || '';
       const days = pub ? Math.floor((Date.now() - new Date(pub).getTime()) / 86400000) : null;
-      return `<div class="rc glass mb8">
-        <img class="rc-thumb" src="${thumb}" alt="" loading="lazy">
-        <div class="rc-body">
-          <div class="rc-title">${esc(title)}</div>
-          <div class="rc-meta">${esc(ch)} ${days !== null ? `· hace ${days}d` : ''}</div>
-          <div class="rc-acts">
-            <a href="https://youtu.be/${vid}" target="_blank" class="btn btn-s btn-sm">▶ Ver</a>
-            <button class="btn btn-v btn-sm" data-action="analyze-comp" data-vid="${vid}">🤖 Como ref.</button>
-          </div>
-        </div>
-      </div>`;
+      return `<div class="rc glass mb8"><img class="rc-thumb" src="${thumb}" alt="" loading="lazy">` +
+        `<div class="rc-body"><div class="rc-title">${esc(title)}</div>` +
+        `<div class="rc-meta">${esc(ch)} ${days !== null ? '· hace ' + days + 'd' : ''}</div>` +
+        `<div class="rc-acts">` +
+        `<a href="https://youtu.be/${vid}" target="_blank" class="btn btn-s btn-sm">▶ Ver</a>` +
+        `<button class="btn btn-v btn-sm" data-action="analyze-comp" data-vid="${vid}">🤖 Como ref.</button>` +
+        `</div></div></div>`;
     }).join('');
     toast(`${items.length} videos encontrados`, 'success');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
@@ -1553,18 +1488,16 @@ function renderSavedIdeas() {
   const list = filter === 'all' ? CP.ideas.saved : CP.ideas.saved.filter(i => i.status === filter);
   if (!list.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">💡</div><div class="empty-t">Sin ideas</div></div>'; return; }
   el.innerHTML = list.map(idea =>
-    `<div class="rc glass mb8">
-      <div class="rc-body">
-        <div class="rc-title">${esc(idea.title)}</div>
-        <div class="rc-meta">${esc(idea.category||'')} · ${new Date(idea.created_at).toLocaleDateString('es-AR')}</div>
-      </div>
-      <span class="badge b-${idea.status||'pending'}">${idea.status||'pending'}</span>
-      <div class="row" style="gap:5px">
-        <button class="btn btn-ok btn-sm" data-action="update-idea" data-id="${idea.id}" data-st="approved">✓</button>
-        <button class="btn btn-d btn-sm" data-action="update-idea" data-id="${idea.id}" data-st="discarded">✕</button>
-        <button class="btn btn-v btn-sm" data-action="idea-to-script" data-title="${escA(idea.title)}">📝</button>
-      </div>
-    </div>`).join('');
+    `<div class="rc glass mb8"><div class="rc-body">` +
+    `<div class="rc-title">${esc(idea.title)}</div>` +
+    `<div class="rc-meta">${esc(idea.category||'')} · ${new Date(idea.created_at).toLocaleDateString('es-AR')}</div></div>` +
+    `<span class="badge b-${idea.status||'pending'}">${idea.status||'pending'}</span>` +
+    `<div class="row" style="gap:5px">` +
+    `<button class="btn btn-ok btn-sm" data-action="update-idea" data-id="${idea.id}" data-st="approved">✓</button>` +
+    `<button class="btn btn-d btn-sm" data-action="update-idea" data-id="${idea.id}" data-st="discarded">✕</button>` +
+    `<button class="btn btn-v btn-sm" data-action="idea-to-script" data-title="${escA(idea.title)}">📝</button>` +
+    `</div></div>`
+  ).join('');
 }
 
 async function updateIdea(id, status) {
@@ -1582,8 +1515,7 @@ async function loadVerifierIdeas() {
   CP.ideas.pending = data || [];
   if (!CP.ideas.pending.length) {
     el.innerHTML = '<span class="muted">No hay ideas pendientes.</span>';
-    document.getElementById('btn-run-ver').disabled = true;
-    return;
+    document.getElementById('btn-run-ver').disabled = true; return;
   }
   el.innerHTML = CP.ideas.pending.map(i =>
     `<div class="rowc mb8"><span class="cc1">💡</span><span style="flex:1;padding:0 8px">${esc(i.title)}</span><span class="badge b-pending">pending</span></div>`
@@ -1594,7 +1526,7 @@ async function loadVerifierIdeas() {
 async function runVerifier() {
   const ideas = CP.ideas.pending || [];
   if (!ideas.length) { toast('Sin ideas para verificar', 'warning'); return; }
-  const btn  = document.getElementById('btn-run-ver');
+  const btn = document.getElementById('btn-run-ver');
   const pbar = document.getElementById('ver-pbar');
   const pfill = document.getElementById('ver-pfill');
   const statusEl = document.getElementById('ver-status');
@@ -1617,17 +1549,13 @@ async function runVerifier() {
       await CP.sb.from('ideas').update({ status: newSt }).eq('id', idea.id);
       const cls = evd.verdict === 'USAR' ? 'b-usar' : evd.verdict === 'REVISAR' ? 'b-revisar' : 'b-descartar';
       resEl.insertAdjacentHTML('beforeend',
-        `<div class="panel glass mb8">
-          <div class="rowc">
-            <span class="badge ${cls}">${evd.verdict}</span>
-            <strong style="flex:1;padding:0 8px">${esc(idea.title)}</strong>
-            <span class="muted mono">${evd.score}/100</span>
-          </div>
-          <div class="muted mt8">${esc(evd.reason||'')} · Demanda: ${evd.demand||'—'} · Footage: ${cScore}%</div>
-        </div>`);
+        `<div class="panel glass mb8"><div class="rowc">` +
+        `<span class="badge ${cls}">${evd.verdict}</span>` +
+        `<strong style="flex:1;padding:0 8px">${esc(idea.title)}</strong>` +
+        `<span class="muted mono">${evd.score}/100</span></div>` +
+        `<div class="muted mt8">${esc(evd.reason||'')} · Demanda: ${evd.demand||'—'} · Footage: ${cScore}%</div></div>`);
     } catch (e) {
-      resEl.insertAdjacentHTML('beforeend',
-        `<div class="panel glass mb8 cerr">${esc(idea.title)}: ${esc(e.message)}</div>`);
+      resEl.insertAdjacentHTML('beforeend', `<div class="panel glass mb8 cerr">${esc(idea.title)}: ${esc(e.message)}</div>`);
     }
     await sleep(700);
   }
@@ -1639,11 +1567,8 @@ async function runVerifier() {
 
 // ── VOICES ───────────────────────────────────────────────────
 const V_RX = [
-  /^\[(\d+)\]/,
-  /^LUGAR\s+(\d+)/i,
-  /^PLACE\s+(\d+)/i,
-  /^SECCIÓN\s+(\d+)/i,
-  /^SECTION\s+(\d+)/i
+  /^\[(\d+)\]/, /^LUGAR\s+(\d+)/i, /^PLACE\s+(\d+)/i,
+  /^SECCIÓN\s+(\d+)/i, /^SECTION\s+(\d+)/i
 ];
 
 function detectVoiceSegs() {
@@ -1652,8 +1577,6 @@ function detectVoiceSegs() {
   const lines = text.split('\n');
   const segs = [];
   let cur = null, curLines = [];
-
-  // First try: numbered markers
   for (const line of lines) {
     const t = line.trim();
     let matched = false;
@@ -1668,41 +1591,32 @@ function detectVoiceSegs() {
     if (!matched && cur !== null) curLines.push(t);
   }
   if (cur !== null) segs.push({ num: cur, text: curLines.join('\n').trim() });
-
   let valid = segs.filter(s => s.text.length > 10);
-
-  // Fallback: ALL-CAPS headers (Crazy Places documentary format)
   if (!valid.length) {
-    let counter = 0; cur = null; curLines = [];
+    let counter = 0; cur = null; curLines = []; const capSegs = [];
     for (const line of lines) {
       const t = line.trim();
       if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
-      if (isAllCapsHeader(t)) {
-        if (counter > 0) segs.push({ num: counter, text: curLines.join('\n').trim() });
-        counter++;
-        curLines = [];
-      } else if (counter > 0) {
-        curLines.push(t);
-      }
+      if (isAllCapsHeader(t)) { if (counter > 0) capSegs.push({ num: counter, text: curLines.join('\n').trim() }); counter++; curLines = []; }
+      else if (counter > 0) curLines.push(t);
     }
-    if (counter > 0 && curLines.length) segs.push({ num: counter, text: curLines.join('\n').trim() });
-    valid = segs.filter(s => s.text.length > 10);
+    if (counter > 0 && curLines.length) capSegs.push({ num: counter, text: curLines.join('\n').trim() });
+    valid = capSegs.filter(s => s.text.length > 10);
   }
-
   if (!valid.length) { detectVoiceSegsAI(text); return; }
   CP.voices.segs = valid; CP.voices.audio = {};
   renderVoiceSegs();
+  updateCostEst();
   document.getElementById('btn-gen-all-v').disabled = false;
   document.getElementById('btn-zip').disabled = false;
   document.getElementById('cr-segs').textContent = valid.length;
-  updateCostEst();
   toast(`${valid.length} segmentos detectados`, 'success');
 }
 
 async function detectVoiceSegsAI(text) {
   toast('Usando IA para detectar segmentos...', 'info');
   try {
-    const lines = text.split('\n').map((l, i) => `${i+1}: ${l}`).join('\n');
+    const lines = text.split('\n').map((l,i) => `${i+1}: ${l}`).join('\n');
     const r = await callClaude(
       [{ role: 'user', content: `Detectá los inicios de segmentos/lugares en este guión:\n${lines.slice(0,3000)}\n\nJSON: [{"lineNum":5,"segNum":1},{"lineNum":20,"segNum":2},...]` }],
       'Detectas segmentos en guiones. Solo JSON.', 600
@@ -1716,9 +1630,9 @@ async function detectVoiceSegsAI(text) {
     }).filter(s => s.text.length > 10);
     CP.voices.audio = {};
     renderVoiceSegs();
+    updateCostEst();
     document.getElementById('btn-gen-all-v').disabled = false;
     document.getElementById('cr-segs').textContent = CP.voices.segs.length;
-    updateCostEst();
     toast(`${CP.voices.segs.length} segmentos (IA)`, 'success');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
@@ -1734,32 +1648,18 @@ function renderVoiceSegs() {
   const el = document.getElementById('v-segs-list');
   if (!el) return;
   el.innerHTML = CP.voices.segs.map((seg, i) =>
-    `<div class="vseg glass" id="vseg-${i}">
-      <div class="vseg-hd">
-        <span class="vseg-lbl">Segmento ${seg.num}</span>
-        <span class="vseg-ch">${seg.text.length} chars</span>
-      </div>
-      <div class="vseg-txt">${esc(seg.text.slice(0,180))}${seg.text.length>180?'...':''}</div>
-      <div class="lgrid">
-        <div class="li" id="li-${i}-es">
-          <span>🇪🇸</span>
-          <span class="lst" id="lst-${i}-es">Pendiente</span>
-          <div class="row" style="gap:4px">
-            <button class="btn btn-s btn-sm" data-action="gen-seg" data-idx="${i}" data-lang="es">🎙️</button>
-            <a id="dl-${i}-es" class="btn btn-ok btn-sm hidden">⬇️</a>
-          </div>
-        </div>
-        <div class="li" id="li-${i}-en">
-          <span>🇺🇸</span>
-          <span class="lst" id="lst-${i}-en">Pendiente</span>
-          <div class="row" style="gap:4px">
-            <button class="btn btn-s btn-sm" data-action="gen-seg" data-idx="${i}" data-lang="en">🎙️</button>
-            <a id="dl-${i}-en" class="btn btn-ok btn-sm hidden">⬇️</a>
-          </div>
-        </div>
-      </div>
-      <button class="btn btn-v btn-sm mt8" data-action="gen-seg" data-idx="${i}">🎙️ Generar ES + EN</button>
-    </div>`).join('');
+    `<div class="vseg glass mb12" id="vseg-${i}">` +
+    `<div class="vseg-hd"><span class="vseg-lbl">Segmento ${seg.num}</span><span class="vseg-ch">${seg.text.length} chars</span></div>` +
+    `<div class="vseg-txt">${esc(seg.text.slice(0,180))}${seg.text.length>180?'...':''}</div>` +
+    `<div class="lgrid">` +
+    `<div class="li" id="li-${i}-es"><span>🇪🇸</span><span class="lst" id="lst-${i}-es">Pendiente</span>` +
+    `<div class="row" style="gap:4px"><button class="btn btn-s btn-sm" data-action="gen-seg" data-idx="${i}" data-lang="es">🎙️</button>` +
+    `<a id="dl-${i}-es" class="btn btn-ok btn-sm hidden">⬇️</a></div></div>` +
+    `<div class="li" id="li-${i}-en"><span>🇺🇸</span><span class="lst" id="lst-${i}-en">Pendiente</span>` +
+    `<div class="row" style="gap:4px"><button class="btn btn-s btn-sm" data-action="gen-seg" data-idx="${i}" data-lang="en">🎙️</button>` +
+    `<a id="dl-${i}-en" class="btn btn-ok btn-sm hidden">⬇️</a></div></div></div>` +
+    `<button class="btn btn-v btn-sm mt8" data-action="gen-seg" data-idx="${i}">🎙️ Generar ES + EN</button></div>`
+  ).join('');
 }
 
 async function genAllVoices() {
@@ -1771,13 +1671,13 @@ async function genSeg(idx, lang) {
   if (!seg) return;
   const langs = lang ? [lang] : ['es', 'en'];
   for (const l of langs) {
-    const vid = CP.cfg[`voice_${l}`];
-    if (!vid) { toast(`Voice ID para ${l.toUpperCase()} no configurado`, 'warning'); continue; }
+    const voiceId = CP.cfg[`voice_${l}`];
+    if (!voiceId) { toast(`Voice ID para ${l.toUpperCase()} no configurado en ⚙️`, 'warning'); continue; }
     const stEl = document.getElementById(`lst-${idx}-${l}`);
     const dlEl = document.getElementById(`dl-${idx}-${l}`);
     if (stEl) { stEl.className = 'lst proc'; stEl.textContent = 'Generando...'; }
     try {
-      const taskId = await ai33Gen(seg.text, vid);
+      const taskId = await ai33Gen(seg.text, voiceId);
       if (stEl) stEl.textContent = 'Procesando...';
       const url = await ai33Poll(taskId);
       if (!CP.voices.audio[idx]) CP.voices.audio[idx] = {};
@@ -1799,9 +1699,7 @@ async function refreshCredits() {
   const key = CP.cfg.ai33_key;
   if (!key) { toast('AI33 key no configurada', 'warning'); return; }
   try {
-    const r = await fetch('https://api.ai33.pro/v1/credits', {
-      headers: { 'xi-api-key': key }
-    });
+    const r = await fetch('https://api.ai33.pro/v1/credits', { headers: { 'xi-api-key': key } });
     const d = await r.json();
     const amount = d.credits ?? d.ec_remain_credits ?? d.remaining ?? '?';
     document.getElementById('cr-ai33').textContent = amount;
@@ -1843,30 +1741,213 @@ async function genTitles() {
       ? 'Experto en SEO y títulos de YouTube para documentales de lugares extremos. Optimizás para CTR alto con curiosidad y urgencia.'
       : 'Expert in YouTube SEO and titles for extreme places documentaries. You optimize for high CTR with curiosity and urgency.';
     const user = lang === 'es'
-      ? `Generá 6 variantes de título Y una descripción para:\n\nLugar/Tema: "${topic}"\nResumen: "${summary}"\n\nLas 6 variantes:\n1. "Crazy Places | [lugar ajustado]"\n2. "Lugares Imposibles | [variación]"\n3. "[Lugar] — Crazy Places"\n4. Formato drama/pregunta sin marca\n5. Superlativo ("El lugar más...")\n6. Misterio/secreto\n\nJSON: {"titles":[{"format":"Serie 1","title":"..."},{"format":"Serie 2","title":"..."},{"format":"Serie 3","title":"..."},{"format":"Drama","title":"..."},{"format":"Superlativo","title":"..."},{"format":"Misterio","title":"..."}],"desc_dynamic":"Párrafo 1 dinámico (3-4 oraciones sobre el video)"}`
+      ? `Generá 6 variantes de título Y una descripción para:\n\nLugar/Tema: "${topic}"\nResumen: "${summary}"\n\nLas 6 variantes:\n1. "Crazy Places | [lugar ajustado]"\n2. "Lugares Imposibles | [variación]"\n3. "[Lugar] — Crazy Places"\n4. Drama/pregunta formato sin marca\n5. Superlativo ("El lugar más...")\n6. Misterio/secreto\n\nJSON: {"titles":[{"format":"Serie 1","title":"..."},{"format":"Serie 2","title":"..."},{"format":"Serie 3","title":"..."},{"format":"Drama","title":"..."},{"format":"Superlativo","title":"..."},{"format":"Misterio","title":"..."}],"desc_dynamic":"Párrafo 1 dinámico (3-4 oraciones sobre el video)"}`
       : `Generate 6 title variants AND a description for:\n\nPlace/Topic: "${topic}"\nSummary: "${summary}"\n\nThe 6 variants:\n1. "Crazy Places | [adjusted place]"\n2. "Impossible Places | [variation]"\n3. "[Place] — Crazy Places"\n4. Drama/question format without brand\n5. Superlative ("The most...")\n6. Mystery/secret\n\nJSON: {"titles":[{"format":"Series 1","title":"..."},{"format":"Series 2","title":"..."},{"format":"Series 3","title":"..."},{"format":"Drama","title":"..."},{"format":"Superlative","title":"..."},{"format":"Mystery","title":"..."}],"desc_dynamic":"Dynamic paragraph 1 (3-4 sentences about the video)"}`;
     const r = await callClaude([{ role: 'user', content: user }], sys, 1800);
     const d = JSON.parse(r.replace(/```json|```/g, '').trim());
     const fullDesc = (d.desc_dynamic || '') + (boiler ? '\n\n' + boiler : '');
     document.getElementById('titles-out').innerHTML =
-      `<div>
-        <div class="pt mb12">🏷️ Variantes de Título</div>
-        ${(d.titles||[]).map(t =>
-          `<div class="tvcard glass mb8">
-            <div class="tvfmt">${esc(t.format)}</div>
-            <div class="tvtitle">${esc(t.title)}</div>
-            <button class="btn btn-s btn-sm" data-action="copy-txt" data-txt="${escA(t.title)}">📋 Copiar</button>
-          </div>`).join('')}
-        <div class="pt mt20 mb12">📄 Descripción</div>
-        <div class="panel glass">
-          <div style="white-space:pre-wrap;font-size:12px;color:var(--t2);line-height:1.65;max-height:200px;overflow-y:auto">${esc(fullDesc)}</div>
-          <button class="btn btn-s btn-sm mt12" data-action="copy-txt" data-txt="${escA(fullDesc)}">📋 Copiar descripción</button>
-        </div>
-      </div>`;
+      `<div><div class="pt mb12">🏷️ Variantes de Título</div>` +
+      (d.titles||[]).map(t =>
+        `<div class="tvcard glass mb8"><div class="tvfmt">${esc(t.format)}</div>` +
+        `<div class="tvtitle">${esc(t.title)}</div>` +
+        `<button class="btn btn-s btn-sm" data-action="copy-txt" data-txt="${escA(t.title)}">📋 Copiar</button></div>`
+      ).join('') +
+      `<div class="pt mt20 mb12">📄 Descripción</div>` +
+      `<div class="panel glass"><div style="white-space:pre-wrap;font-size:12px;color:var(--t2);line-height:1.65;max-height:200px;overflow-y:auto">${esc(fullDesc)}</div>` +
+      `<button class="btn btn-s btn-sm mt12" data-action="copy-txt" data-txt="${escA(fullDesc)}">📋 Copiar descripción</button></div></div>`;
     toast('Títulos y descripción generados ✓', 'success');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '✨ Generar Títulos y Descripción'; }
 }
+
+// ── DOWNLOAD SCRIPT (yt-dlp .bat) ────────────────────────────
+var _dlScript = '';
+
+function getDlConfig() {
+  return {
+    quality : document.getElementById('dl-quality')?.value || '1080',
+    audio   : document.getElementById('dl-audio')?.value || 'no',
+    noAv1   : document.getElementById('dl-no-av1')?.checked !== false,
+    noMeta  : document.getElementById('dl-no-meta')?.checked !== false
+  };
+}
+
+function buildFormat(cfg) {
+  const q = cfg.quality !== 'best' ? `[height<=${cfg.quality}]` : '';
+  const av1 = cfg.noAv1 ? '[vcodec!^=av01]' : '';
+  return cfg.audio === 'no'
+    ? `bestvideo[ext=mp4]${q}${av1}/bestvideo[ext=webm]${q}${av1}/bestvideo${q}${av1}`
+    : `bestvideo[ext=mp4]${q}${av1}+bestaudio[ext=m4a]/bestvideo${q}${av1}+bestaudio/best${q}${av1}`;
+}
+
+function buildMetaFlags(cfg) {
+  return cfg.noMeta ? ' --no-write-info-json --no-write-description --no-write-thumbnail --no-embed-metadata --no-embed-chapters' : '';
+}
+
+function collectSegments() {
+  const results = CP.clips.results;
+  const checkedVids = new Set(Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(cb => cb.dataset.vid));
+  return CP.clips.segs.map(seg => {
+    const videos = results[seg.num] || [];
+    const toDownload = checkedVids.size > 0 ? videos.filter(v => checkedVids.has(v.id?.videoId)) : videos;
+    if (!toDownload.length) return null;
+    const safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
+    return { name: seg.name, folder: String(seg.num).padStart(2,'0') + '_' + safeName, urls: toDownload.map(v => v.id?.videoId||'').filter(Boolean) };
+  }).filter(Boolean);
+}
+
+async function estimateSize() {
+  const segments = collectSegments();
+  if (!segments.length) { toast('Sin videos para estimar', 'warning'); return; }
+  const el = document.getElementById('size-estimate');
+  const btn = document.getElementById('btn-estimate');
+  if (_srvConnected) {
+    btn.disabled = true; el.textContent = 'Consultando yt-dlp...';
+    const cfg = getDlConfig();
+    const allUrls = segments.flatMap(s => s.urls);
+    try {
+      const r = await fetch(SERVER + '/estimate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: allUrls, format: buildFormat(cfg) })
+      });
+      const d = await r.json();
+      if (d.total_bytes > 0) {
+        const mb = (d.total_bytes / 1048576).toFixed(0);
+        const gb = (d.total_bytes / 1073741824).toFixed(2);
+        el.textContent = `≈ ${gb >= 1 ? gb + ' GB' : mb + ' MB'} (${d.counted}/${allUrls.length} consultados)`;
+        el.style.color = 'var(--ok)';
+      } else { el.textContent = 'Sin datos de tamaño (YouTube no reporta)'; }
+    } catch(e) { el.textContent = 'Error: ' + e.message; }
+    btn.disabled = false;
+  } else {
+    const perVid = { '1080': 150, '720': 80, 'best': 200 };
+    const cfg = getDlConfig();
+    const total = segments.reduce((s,b) => s + b.urls.length * (perVid[cfg.quality]||150), 0);
+    el.textContent = `≈ ${total >= 1024 ? (total/1024).toFixed(1) + ' GB' : total + ' MB'} (aprox, servidor offline)`;
+    el.style.color = 'var(--c3)';
+  }
+}
+
+function genDlScript() {
+  const segments = collectSegments();
+  if (!segments.length) { toast('Sin videos para el script', 'warning'); return; }
+  const cfg = getDlConfig();
+  const fmt = buildFormat(cfg);
+  const meta = buildMetaFlags(cfg);
+  const totalVideos = segments.reduce((s,b) => s + b.urls.length, 0);
+  const L = [];
+  L.push('@echo off');
+  L.push('chcp 65001 >nul');
+  L.push('echo.');
+  L.push('echo  CRAZY PLACES - Auto-Downloader');
+  L.push('echo  Formato: ' + fmt.slice(0,60));
+  L.push('echo  Total: ' + totalVideos + ' videos en ' + segments.length + ' carpetas');
+  L.push('echo.');
+  L.push('where yt-dlp >nul 2>&1');
+  L.push('if %errorlevel% neq 0 (');
+  L.push('  if exist "%~dp0yt-dlp.exe" ( set "YD=%~dp0yt-dlp.exe" ) else (');
+  L.push('    echo ERROR: yt-dlp no encontrado. Instalar: pip install yt-dlp');
+  L.push('    pause & exit /b 1');
+  L.push('  )');
+  L.push(') else ( set "YD=yt-dlp" )');
+  L.push('%YD% -U');
+  L.push('mkdir crazy_places_downloads 2>nul');
+  L.push('cd crazy_places_downloads');
+  for (const blk of segments) {
+    L.push(`:: --- ${blk.name} (${blk.urls.length} videos) ---`);
+    L.push(`mkdir "${blk.folder}" 2>nul`);
+    for (const vid of blk.urls) {
+      L.push(`%YD% -f "${fmt}"` + ` -o "${blk.folder}\\%(title)s.%(ext)s"` +
+        ` --no-playlist --restrict-filenames --retries 3${meta}` +
+        ` "https://www.youtube.com/watch?v=${vid}"`);
+    }
+  }
+  L.push('cd ..');
+  L.push('echo.');
+  L.push('echo  Creando ZIP...');
+  L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
+  L.push('echo  Listo. ZIP: crazy_places_downloads.zip');
+  L.push('pause');
+  _dlScript = L.join('\r\n');
+  document.getElementById('dl-script-info').classList.remove('hidden');
+  document.getElementById('dl-script-summary').textContent = `${segments.length} carpetas · ${totalVideos} videos · ${cfg.audio==='no'?'sin audio':'con audio'} · ${cfg.noAv1?'sin AV1':'todos formatos'}`;
+  toast('Script .bat generado ✓', 'success');
+}
+
+function downloadDlScript() {
+  if (!_dlScript) { toast('Genera el script primero', 'warning'); return; }
+  const blob = new Blob([_dlScript], { type: 'text/plain' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'crazy_places_download.bat'; a.click();
+  toast('Script .bat descargado', 'success');
+}
+
+// ── SERVER LOCAL ──────────────────────────────────────────────
+const SERVER = 'http://localhost:8765';
+var _srvConnected = false;
+var _progressInterval = null;
+
+function checkServer() {
+  fetch(SERVER + '/status', { signal: AbortSignal.timeout(1500) })
+    .then(r => r.json())
+    .then(() => {
+      _srvConnected = true;
+      document.getElementById('srv-dot').className = 'dot ok';
+      document.getElementById('srv-label').textContent = 'Servidor ✓';
+      const btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.remove('hidden');
+    })
+    .catch(() => {
+      _srvConnected = false;
+      document.getElementById('srv-dot').className = 'dot err';
+      document.getElementById('srv-label').textContent = 'Servidor offline';
+      const btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.add('hidden');
+    });
+}
+
+async function directDownload() {
+  if (!_srvConnected) { toast('Servidor offline. Ejecutá iniciar_servidor.bat primero.', 'error'); return; }
+  const segments = collectSegments();
+  if (!segments.length) { toast('Sin videos encontrados', 'warning'); return; }
+  const cfg = getDlConfig();
+  try {
+    const r = await fetch(SERVER + '/download', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments, format: buildFormat(cfg), metaFlags: buildMetaFlags(cfg) })
+    });
+    const d = await r.json();
+    if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+    toast('Descarga iniciada: ' + d.total + ' videos', 'success');
+    document.getElementById('dl-progress-panel').classList.remove('hidden');
+    startProgressPolling();
+  } catch(e) { toast('Error conectando al servidor: ' + e.message, 'error'); }
+}
+
+function startProgressPolling() {
+  if (_progressInterval) clearInterval(_progressInterval);
+  _progressInterval = setInterval(() => {
+    fetch(SERVER + '/progress').then(r => r.json()).then(p => {
+      const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+      document.getElementById('dl-pfill').style.width = pct + '%';
+      document.getElementById('dl-progress-text').textContent = `${p.done}/${p.total} videos${p.current ? ' — ' + p.current : ''}`;
+      if (p.log?.length) {
+        const logEl = document.getElementById('dl-log');
+        logEl.textContent = p.log.slice(-20).join('\n');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      if (p.status === 'done') {
+        clearInterval(_progressInterval);
+        document.getElementById('dl-progress-text').textContent = '✅ Descarga completa. ZIP creado en Downloads.';
+        document.getElementById('btn-open-folder').classList.remove('hidden');
+        toast('Descarga completa ✓', 'success');
+      }
+    }).catch(() => clearInterval(_progressInterval));
+  }, 1500);
+}
+
+function openDlFolder() { fetch(SERVER + '/open-folder').catch(() => {}); }
 
 // ── ADMIN ────────────────────────────────────────────────────
 async function createUser() {
@@ -1901,22 +1982,17 @@ async function loadUsers() {
   if (!el) return;
   if (!data?.length) { el.innerHTML = '<span class="muted">Sin usuarios</span>'; return; }
   const now = Date.now();
-  el.innerHTML = `<table class="dtbl">
-    <thead><tr><th>Email</th><th>Rol</th><th>Créditos</th><th>Estado</th><th>Acciones</th></tr></thead>
-    <tbody>${data.map(u => {
+  el.innerHTML = `<table class="dtbl"><thead><tr><th>Email</th><th>Rol</th><th>Créditos</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>` +
+    data.map(u => {
       const online = u.last_seen && (now - new Date(u.last_seen).getTime()) < 600000;
-      return `<tr>
-        <td>${esc(u.email||'—')}</td>
-        <td><span class="badge b-${u.role||'collaborator'}">${u.role||'collaborator'}</span></td>
-        <td><input type="number" id="cred-${u.id}" value="${u.tts_credits||0}" min="0" style="width:64px;padding:3px 7px">
-            <button class="btn btn-s btn-sm" data-action="save-credits" data-id="${u.id}">✓</button></td>
-        <td style="color:${online?'var(--ok)':'var(--t3)'}">${online?'● Online':'○ Offline'}${u.disabled?' <span class="badge b-discarded">Desact.</span>':''}</td>
-        <td>
-          <button class="btn btn-sm ${u.disabled?'btn-ok':'btn-d'}" data-action="toggle-user" data-id="${u.id}" data-dis="${u.disabled}">${u.disabled?'Activar':'Desact.'}</button>
-          <button class="btn btn-s btn-sm" data-action="change-role" data-id="${u.id}" data-role="${u.role==='admin'?'collaborator':'admin'}">${u.role==='admin'?'→ Colab.':'→ Admin'}</button>
-        </td>
-      </tr>`;
-    }).join('')}</tbody></table>`;
+      return `<tr><td>${esc(u.email||'—')}</td>` +
+        `<td><span class="badge b-${u.role||'collaborator'}">${u.role||'collaborator'}</span></td>` +
+        `<td><input type="number" id="cred-${u.id}" value="${u.tts_credits||0}" min="0" style="width:64px;padding:3px 7px">` +
+        `<button class="btn btn-s btn-sm" data-action="save-credits" data-id="${u.id}">✓</button></td>` +
+        `<td style="color:${online?'var(--ok)':'var(--t3)'}">${online?'● Online':'○ Offline'}${u.disabled?' <span class="badge b-discarded">Desact.</span>':''}</td>` +
+        `<td><button class="btn btn-sm ${u.disabled?'btn-ok':'btn-d'}" data-action="toggle-user" data-id="${u.id}" data-dis="${u.disabled}">${u.disabled?'Activar':'Desact.'}</button>` +
+        `<button class="btn btn-s btn-sm" data-action="change-role" data-id="${u.id}" data-role="${u.role==='admin'?'collaborator':'admin'}">${u.role==='admin'?'→ Colab.':'→ Admin'}</button></td></tr>`;
+    }).join('') + '</tbody></table>';
 }
 
 async function toggleUser(id, isDisabled) {
@@ -1924,13 +2000,11 @@ async function toggleUser(id, isDisabled) {
   await loadUsers();
   toast(`Usuario ${!isDisabled?'desactivado':'activado'}`, 'success');
 }
-
 async function changeRole(id, newRole) {
   await CP.sb.from('profiles').update({ role: newRole }).eq('id', id);
   await loadUsers();
   toast(`Rol → ${newRole}`, 'success');
 }
-
 async function saveCredits(id) {
   const input = document.getElementById(`cred-${id}`);
   if (!input) return;
@@ -1938,122 +2012,7 @@ async function saveCredits(id) {
   toast('Créditos actualizados', 'success');
 }
 
-// ── UTILS ────────────────────────────────────────────────────
-// ── DOWNLOAD SCRIPT GENERATOR ────────────────────────────────
-var _dlScript = '';
-
-function genDlScript() {
-  var results = CP.clips.results;
-  if (!Object.keys(results).length) { toast('Sin videos para descargar', 'warning'); return; }
-  var checkedVids = new Set(
-    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
-  );
-  var segs = CP.clips.segs;
-  var totalVideos = 0;
-  var blocks = [];
-  for (var i = 0; i < segs.length; i++) {
-    var seg = segs[i];
-    var videos = results[seg.num] || [];
-    if (!videos.length) continue;
-    var toDownload = checkedVids.size > 0
-      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
-      : videos;
-    if (!toDownload.length) continue;
-    var safeName = seg.name.replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'_').slice(0,40);
-    var folderName = String(seg.num).padStart(2,'0') + '_' + safeName;
-    var urlLines = toDownload.map(function(v){
-      return "        'https://www.youtube.com/watch?v=" + (v.id && v.id.videoId || '') + "'";
-    }).join(',\n');
-    totalVideos += toDownload.length;
-    blocks.push({ folderName: folderName, urlLines: urlLines, segName: seg.name, count: toDownload.length });
-  }
-  if (!blocks.length) { toast('Sin videos para el script', 'warning'); return; }
-  var segBlocks = blocks.map(function(b){
-    return (
-      '    # ' + b.segName + ' (' + b.count + ' videos)\n' +
-      '    {\n' +
-      "        'folder': os.path.join(OUTPUT_DIR, '" + b.folderName + "'),\n" +
-      "        'urls': [\n" + b.urlLines + '\n        ]\n    }'
-    );
-  }).join(',\n');
-  var nBlocks = blocks.length;
-  var nVids = totalVideos;
-  var py = [
-    '#!/usr/bin/env python3',
-    '# CRAZY PLACES -- Auto-Downloader',
-    '# REQUISITOS: pip install yt-dlp',
-    '# USO:        python crazy_places_download.py',
-    '',
-    'import os, sys, subprocess, zipfile',
-    'from datetime import datetime',
-    '',
-    'OUTPUT_DIR = "crazy_places_downloads"',
-    'FORMAT = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
-    '',
-    'SEGMENTS = [',
-    segBlocks,
-    ']',
-    '',
-    'def check_ytdlp():',
-    '    try:',
-    '        subprocess.run(["yt-dlp","--version"], capture_output=True, check=True)',
-    '    except (subprocess.CalledProcessError, FileNotFoundError):',
-    '        print("ERROR: instalar con: pip install yt-dlp"); sys.exit(1)',
-    '',
-    'def download_segment(seg):',
-    '    os.makedirs(seg["folder"], exist_ok=True)',
-    '    print("\n[LUGAR] " + os.path.basename(seg["folder"]))',
-    '    ok = 0',
-    '    for url in seg["urls"]:',
-    '        print("  -> " + url)',
-    '        r = subprocess.run(["yt-dlp","-f",FORMAT,"-o",',
-    '            os.path.join(seg["folder"],"%(title)s.%(ext)s"),',
-    '            "--no-playlist","--restrict-filenames","--retries","3",url])',
-    '        if r.returncode == 0: ok += 1; print("     OK")',
-    '        else: print("     ADVERTENCIA: error (privado o eliminado)")',
-    '    return ok',
-    '',
-    'def create_zip():',
-    '    ts = datetime.now().strftime("%Y%m%d_%H%M")',
-    '    zname = "crazy_places_" + ts + ".zip"',
-    '    with zipfile.ZipFile(zname,"w",zipfile.ZIP_DEFLATED) as zf:',
-    '        for root,dirs,files in os.walk(OUTPUT_DIR):',
-    '            for f in files:',
-    '                fp = os.path.join(root,f)',
-    '                zf.write(fp, os.path.relpath(fp, os.path.dirname(OUTPUT_DIR)))',
-    '    mb = round(os.path.getsize(zname)/1048576,1)',
-    '    print("ZIP listo: " + zname + " (" + str(mb) + " MB)")',
-    '',
-    'def main():',
-    '    print("CRAZY PLACES -- Auto-Downloader")',
-    '    check_ytdlp()',
-    '    os.makedirs(OUTPUT_DIR, exist_ok=True)',
-    '    ok = sum(download_segment(s) for s in SEGMENTS)',
-    '    print("Total: " + str(ok) + "/" + str(sum(len(s[\"urls\"]) for s in SEGMENTS)))',
-    '    if ok > 0: create_zip()',
-    '',
-    'if __name__ == "__main__":',
-    '    main()'
-  ].join('\n');
-  _dlScript = py;
-  document.getElementById('dl-script-info').classList.remove('hidden');
-  document.getElementById('dl-script-summary').textContent =
-    nBlocks + ' carpetas · ' + nVids + ' videos' +
-    (checkedVids.size > 0 ? ' (solo seleccionados)' : ' (todos los resultados)');
-  toast('Script generado ✓', 'success');
-}
-
-function downloadDlScript() {
-  if (!_dlScript) { toast('Apreta primero el boton Script yt-dlp', 'warning'); return; }
-  var blob = new Blob([_dlScript], { type: 'text/plain' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'crazy_places_download.bat';
-  a.click();
-  toast('Script descargado', 'success');
-}
-
-
+// ── UTILS ─────────────────────────────────────────────────────
 function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -2064,457 +2023,6 @@ async function copyTxt(text) {
   try { await navigator.clipboard.writeText(text); toast('Copiado ✓', 'success'); }
   catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Copiado ✓', 'success'); }
 }
-
-// -- SERVER LOCAL -----------------------------------------------
-var SERVER = 'http://localhost:8765';
-var _srvConnected = false;
-var _progressInterval = null;
-
-function checkServer() {
-  fetch(SERVER + '/status', { signal: AbortSignal.timeout(1500) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      _srvConnected = true;
-      document.getElementById('srv-dot').className = 'dot ok';
-      document.getElementById('srv-label').textContent = 'Servidor ✓';
-      var btn = document.getElementById('btn-direct-dl');
-      if (btn) btn.classList.remove('hidden');
-    })
-    .catch(function(){
-      _srvConnected = false;
-      document.getElementById('srv-dot').className = 'dot err';
-      document.getElementById('srv-label').textContent = 'Servidor offline';
-      var btn = document.getElementById('btn-direct-dl');
-      if (btn) btn.classList.add('hidden');
-    });
-}
-
-function directDownload() {
-  if (!_srvConnected) {
-    toast('Servidor offline. Ejecuta iniciar_servidor.bat primero.', 'error');
-    return;
-  }
-  var segments = collectSegments();
-  if (!segments.length) { toast('Sin videos encontrados', 'warning'); return; }
-
-  if (!segments.length) { toast('Sin videos para descargar', 'warning'); return; }
-
-  var cfg = getDlConfig();
-  fetch(SERVER + '/download', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segments: segments, format: buildFormat(cfg), metaFlags: buildMetaFlags(cfg) })
-  })
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    if (d.error) { toast('Error: ' + d.error, 'error'); return; }
-    toast('Descarga iniciada: ' + d.total + ' videos', 'success');
-    document.getElementById('dl-progress-panel').classList.remove('hidden');
-    startProgressPolling();
-  })
-  .catch(function(e){ toast('Error conectando al servidor: ' + e.message, 'error'); });
-}
-
-function startProgressPolling() {
-  if (_progressInterval) clearInterval(_progressInterval);
-  _progressInterval = setInterval(function(){
-    fetch(SERVER + '/progress')
-      .then(function(r){ return r.json(); })
-      .then(function(p){
-        var pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-        document.getElementById('dl-pfill').style.width = pct + '%';
-        document.getElementById('dl-progress-text').textContent =
-          p.done + '/' + p.total + ' videos' + (p.current ? ' — ' + p.current : '');
-        if (p.log && p.log.length) {
-          var logEl = document.getElementById('dl-log');
-          logEl.textContent = p.log.slice(-20).join('\n');
-          logEl.scrollTop = logEl.scrollHeight;
-        }
-        if (p.status === 'done') {
-          clearInterval(_progressInterval);
-          document.getElementById('dl-progress-text').textContent = '✅ Descarga completa. ZIP creado en Downloads.';
-          document.getElementById('btn-open-folder').classList.remove('hidden');
-          toast('Descarga completa ✓', 'success');
-        }
-      })
-      .catch(function(){ clearInterval(_progressInterval); });
-  }, 1500);
-}
-
-function openDlFolder() {
-  fetch(SERVER + '/open-folder').catch(function(){});
-}
-
-
-// -- DOWNLOAD CONFIG HELPERS -----------------------------------
-function getDlConfig() {
-  return {
-    quality : document.getElementById('dl-quality')?.value || '1080',
-    audio   : document.getElementById('dl-audio')?.value || 'no',
-    noAv1   : document.getElementById('dl-no-av1')?.checked !== false,
-    noMeta  : document.getElementById('dl-no-meta')?.checked !== false
-  };
-}
-
-function buildFormat(cfg) {
-  var q   = cfg.quality !== 'best' ? '[height<=' + cfg.quality + ']' : '';
-  var av1 = cfg.noAv1 ? '[vcodec!^=av01]' : '';
-  if (cfg.audio === 'no') {
-    return 'bestvideo[ext=mp4]' + q + av1 + '/bestvideo[ext=webm]' + q + av1 + '/bestvideo' + q + av1;
-  } else {
-    return 'bestvideo[ext=mp4]' + q + av1 + '+bestaudio[ext=m4a]/bestvideo' + q + av1 + '+bestaudio/best' + q + av1;
-  }
-}
-
-function buildMetaFlags(cfg) {
-  if (!cfg.noMeta) return '';
-  return ' --no-write-info-json --no-write-description --no-write-thumbnail --no-embed-metadata --no-embed-chapters';
-}
-
-function collectSegments() {
-  var results = CP.clips.results;
-  var checkedVids = new Set(
-    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
-  );
-  var segs = CP.clips.segs;
-  var segments = [];
-  for (var i = 0; i < segs.length; i++) {
-    var seg = segs[i];
-    var videos = results[seg.num] || [];
-    var toDownload = checkedVids.size > 0
-      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
-      : videos;
-    if (!toDownload.length) continue;
-    var safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
-    segments.push({
-      name: seg.name,
-      folder: String(seg.num).padStart(2,'0') + '_' + safeName,
-      urls: toDownload.map(function(v){ return v.id && v.id.videoId || ''; }).filter(Boolean)
-    });
-  }
-  return segments;
-}
-
-async function estimateSize() {
-  var segments = collectSegments();
-  if (!segments.length) { toast('Sin videos para estimar', 'warning'); return; }
-  var el = document.getElementById('size-estimate');
-  var btn = document.getElementById('btn-estimate');
-
-  if (_srvConnected) {
-    // Accurate estimate via server
-    btn.disabled = true;
-    el.textContent = 'Consultando yt-dlp...';
-    var cfg = getDlConfig();
-    var allUrls = [];
-    segments.forEach(function(s){ s.urls.forEach(function(u){ allUrls.push(u); }); });
-    try {
-      var r = await fetch(SERVER + '/estimate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls: allUrls, format: buildFormat(cfg) })
-      });
-      var d = await r.json();
-      if (d.total_bytes > 0) {
-        var gb = (d.total_bytes / 1073741824).toFixed(2);
-        var mb = (d.total_bytes / 1048576).toFixed(0);
-        el.textContent = '≈ ' + (gb >= 1 ? gb + ' GB' : mb + ' MB') + ' (' + d.counted + '/' + allUrls.length + ' videos consultados)';
-        el.style.color = 'var(--ok)';
-      } else {
-        el.textContent = 'Sin datos de tamaño (YouTube no reporta)';
-      }
-    } catch(e) {
-      el.textContent = 'Error: ' + e.message;
-    }
-    btn.disabled = false;
-  } else {
-    // Rough estimate without server: assume ~150MB per video at 1080p no audio
-    var perVideo = { '1080': 150, '720': 80, 'best': 200 };
-    var cfg = getDlConfig();
-    var total = 0;
-    segments.forEach(function(s){ total += s.urls.length * (perVideo[cfg.quality] || 150); });
-    var gb = (total / 1024).toFixed(1);
-    el.textContent = '≈ ' + (total >= 1024 ? gb + ' GB' : total + ' MB') + ' estimado (servidor offline — dato aproximado)';
-    el.style.color = 'var(--c3)';
-  }
-}
-
-// -- DOWNLOAD SCRIPT GENERATOR ---------------------------------
-var _dlScript = '';
-
-function genDlScript() {
-  var segments = collectSegments();
-  if (!segments.length) { toast('Sin videos para el script', 'warning'); return; }
-  var cfg = getDlConfig();
-  var fmt = buildFormat(cfg);
-  var meta = buildMetaFlags(cfg);
-  var totalVideos = segments.reduce(function(s,b){ return s + b.urls.length; }, 0);
-
-  var L = [];
-  L.push('@echo off');
-  L.push('chcp 65001 >nul');
-  L.push('echo.');
-  L.push('echo  CRAZY PLACES - Auto-Downloader');
-  L.push('echo  Formato: ' + fmt.slice(0,60));
-  L.push('echo  Audio: ' + (cfg.audio === 'no' ? 'NO' : 'SI') + '  AV1: ' + (cfg.noAv1 ? 'EXCLUIDO' : 'PERMITIDO') + '  Meta: ' + (cfg.noMeta ? 'NO' : 'SI'));
-  L.push('echo  Total: ' + totalVideos + ' videos en ' + segments.length + ' carpetas');
-  L.push('echo.');
-  L.push('');
-  L.push('where yt-dlp >nul 2>&1');
-  L.push('if %errorlevel% neq 0 (');
-  L.push('  if exist "%~dp0yt-dlp.exe" ( set "YD=%~dp0yt-dlp.exe" ) else (');
-  L.push('    echo ERROR: yt-dlp no encontrado. Instalar: pip install yt-dlp');
-  L.push('    pause & exit /b 1');
-  L.push('  )');
-  L.push(') else ( set "YD=yt-dlp" )');
-  L.push('');
-  L.push(':: Actualizar yt-dlp para evitar errores 403');
-  L.push('%YD% -U');
-  L.push('');
-  L.push('mkdir crazy_places_downloads 2>nul');
-  L.push('cd crazy_places_downloads');
-  L.push('');
-
-  for (var b = 0; b < segments.length; b++) {
-    var blk = segments[b];
-    L.push(':: --- ' + blk.name + ' (' + blk.urls.length + ' videos) ---');
-    L.push('mkdir "' + blk.folder + '" 2>nul');
-    for (var u = 0; u < blk.urls.length; u++) {
-      L.push('%YD% -f "' + fmt + '"' +
-        ' -o "' + blk.folder + '\\%%(title)s.%%(ext)s"' +
-        ' --no-playlist --restrict-filenames --retries 3' +
-        meta +
-        ' "https://www.youtube.com/watch?v=' + blk.urls[u] + '"');
-    }
-    L.push('');
-  }
-
-  L.push('cd ..');
-  L.push('echo.');
-  L.push('echo  Creando ZIP...');
-  L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
-  L.push('echo.');
-  L.push('echo  Listo. ZIP: crazy_places_downloads.zip');
-  L.push('echo.');
-  L.push('pause');
-
-  _dlScript = L.join('\r\n');
-  document.getElementById('dl-script-info').classList.remove('hidden');
-  document.getElementById('dl-script-summary').textContent =
-    segments.length + ' carpetas \u00b7 ' + totalVideos + ' videos \u00b7 ' + (cfg.audio==='no'?'sin audio':'con audio') + ' \u00b7 ' + (cfg.noAv1?'sin AV1':'todos formatos');
-  toast('Script .bat generado \u2713', 'success');
-}
-
-// -- SERVER LOCAL -----------------------------------------------
-var SERVER = 'http://localhost:8765';
-var _srvConnected = false;
-var _progressInterval = null;
-
-function checkServer() {
-  fetch(SERVER + '/status', { signal: AbortSignal.timeout(1500) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      _srvConnected = true;
-      document.getElementById('srv-dot').className = 'dot ok';
-      document.getElementById('srv-label').textContent = 'Servidor ✓';
-      var btn = document.getElementById('btn-direct-dl');
-      if (btn) btn.classList.remove('hidden');
-    })
-    .catch(function(){
-      _srvConnected = false;
-      document.getElementById('srv-dot').className = 'dot err';
-      document.getElementById('srv-label').textContent = 'Servidor offline';
-      var btn = document.getElementById('btn-direct-dl');
-      if (btn) btn.classList.add('hidden');
-    });
-}
-
-function directDownload() {
-  if (!_srvConnected) {
-    toast('Servidor offline. Ejecuta iniciar_servidor.bat primero.', 'error');
-    return;
-  }
-  var results = CP.clips.results;
-  if (!Object.keys(results).length) { toast('Sin videos encontrados', 'warning'); return; }
-
-  var checkedVids = new Set(
-    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
-  );
-
-  var segs = CP.clips.segs;
-  var segments = [];
-  for (var i = 0; i < segs.length; i++) {
-    var seg = segs[i];
-    var videos = results[seg.num] || [];
-    var toDownload = checkedVids.size > 0
-      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
-      : videos;
-    if (!toDownload.length) continue;
-    var safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
-    segments.push({
-      name: seg.name,
-      folder: String(seg.num).padStart(2,'0') + '_' + safeName,
-      urls: toDownload.map(function(v){ return v.id && v.id.videoId || ''; }).filter(Boolean)
-    });
-  }
-
-  if (!segments.length) { toast('Sin videos para descargar', 'warning'); return; }
-
-  var cfg = getDlConfig();
-  fetch(SERVER + '/download', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segments: segments, format: buildFormat(cfg), metaFlags: buildMetaFlags(cfg) })
-  })
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    if (d.error) { toast('Error: ' + d.error, 'error'); return; }
-    toast('Descarga iniciada: ' + d.total + ' videos', 'success');
-    document.getElementById('dl-progress-panel').classList.remove('hidden');
-    startProgressPolling();
-  })
-  .catch(function(e){ toast('Error conectando al servidor: ' + e.message, 'error'); });
-}
-
-function startProgressPolling() {
-  if (_progressInterval) clearInterval(_progressInterval);
-  _progressInterval = setInterval(function(){
-    fetch(SERVER + '/progress')
-      .then(function(r){ return r.json(); })
-      .then(function(p){
-        var pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-        document.getElementById('dl-pfill').style.width = pct + '%';
-        document.getElementById('dl-progress-text').textContent =
-          p.done + '/' + p.total + ' videos' + (p.current ? ' — ' + p.current : '');
-        if (p.log && p.log.length) {
-          var logEl = document.getElementById('dl-log');
-          logEl.textContent = p.log.slice(-20).join('\n');
-          logEl.scrollTop = logEl.scrollHeight;
-        }
-        if (p.status === 'done') {
-          clearInterval(_progressInterval);
-          document.getElementById('dl-progress-text').textContent = '✅ Descarga completa. ZIP creado en Downloads.';
-          document.getElementById('btn-open-folder').classList.remove('hidden');
-          toast('Descarga completa ✓', 'success');
-        }
-      })
-      .catch(function(){ clearInterval(_progressInterval); });
-  }, 1500);
-}
-
-function openDlFolder() {
-  fetch(SERVER + '/open-folder').catch(function(){});
-}
-
-
-// -- DOWNLOAD SCRIPT GENERATOR ---------------------------------
-var _dlScript = '';
-
-function genDlScript() {
-  var results = CP.clips.results;
-  if (!Object.keys(results).length) { toast('Sin videos para descargar', 'warning'); return; }
-  var checkedVids = new Set(
-    Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(function(cb){ return cb.dataset.vid; })
-  );
-  var segs = CP.clips.segs;
-  var totalVideos = 0;
-  var blocks = [];
-  for (var i = 0; i < segs.length; i++) {
-    var seg = segs[i];
-    var videos = results[seg.num] || [];
-    if (!videos.length) continue;
-    var toDownload = checkedVids.size > 0
-      ? videos.filter(function(v){ return checkedVids.has(v.id && v.id.videoId); })
-      : videos;
-    if (!toDownload.length) continue;
-    var safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
-    var folderName = String(seg.num).padStart(2,'0') + '_' + safeName;
-    var urls = toDownload.map(function(v){ return v.id && v.id.videoId || ''; }).filter(Boolean);
-    totalVideos += urls.length;
-    blocks.push({ folder: folderName, urls: urls, name: seg.name });
-  }
-  if (!blocks.length) { toast('Sin videos para el script', 'warning'); return; }
-
-  var L = [];
-  L.push('@echo off');
-  L.push('chcp 65001 >nul');
-  L.push('echo.');
-  L.push('echo  CRAZY PLACES - Auto-Downloader');
-  L.push('echo  ================================');
-  L.push('echo.');
-  L.push('');
-  L.push('where yt-dlp >nul 2>&1');
-  L.push('if %errorlevel% neq 0 (');
-  L.push('  if exist "%~dp0yt-dlp.exe" ( set "YD=%~dp0yt-dlp.exe" ) else (');
-  L.push('    echo ERROR: yt-dlp no encontrado.');
-  L.push('    echo Instalar: pip install yt-dlp');
-  L.push('    echo O bajar yt-dlp.exe de github.com/yt-dlp/yt-dlp/releases');
-  L.push('    pause & exit /b 1');
-  L.push('  )');
-  L.push(') else ( set "YD=yt-dlp" )');
-  L.push('');
-  L.push('mkdir crazy_places_downloads 2>nul');
-  L.push('cd crazy_places_downloads');
-  L.push('');
-
-  var folderList = [];
-  for (var b = 0; b < blocks.length; b++) {
-    var blk = blocks[b];
-    folderList.push(blk.folder);
-    L.push(':: --- ' + blk.name + ' ---');
-    L.push('mkdir "' + blk.folder + '" 2>nul');
-    for (var u = 0; u < blk.urls.length; u++) {
-      L.push('%YD% -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"' +
-        ' -o "' + blk.folder + '\\%%(title)s.%%(ext)s"' +
-        ' --no-playlist --restrict-filenames --retries 3' +
-        ' "https://www.youtube.com/watch?v=' + blk.urls[u] + '"');
-    }
-    L.push('');
-  }
-
-  L.push('cd ..');
-  L.push('echo.');
-  L.push('echo  Creando ZIP...');
-  L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
-  L.push('echo.');
-  L.push('echo  Listo. ZIP: crazy_places_downloads.zip');
-  L.push('echo.');
-  L.push('pause');
-
-  _dlScript = L.join('\r\n');
-
-  document.getElementById('dl-script-info').classList.remove('hidden');
-  document.getElementById('dl-script-summary').textContent =
-    blocks.length + ' carpetas \u00b7 ' + totalVideos + ' videos' +
-    (checkedVids.size > 0 ? ' (solo seleccionados)' : ' (todos los resultados)');
-  toast('Script .bat generado \u2713', 'success');
-}
-
-
-function downloadDlScript() {
-  if (!_dlScript) { toast('Apreta primero el boton Script yt-dlp', 'warning'); return; }
-  var blob = new Blob([_dlScript], { type: 'text/plain' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'crazy_places_download.bat';
-  a.click();
-  toast('Script descargado', 'success');
-}
-
-
-function esc(str) {
-  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-function escA(str) {
-  return String(str||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-async function copyTxt(text) {
-  try { await navigator.clipboard.writeText(text); toast('Copiado ✓', 'success'); }
-  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Copiado ✓', 'success'); }
-}
-</script>
-</body>
-</html>
 </script>
 </body>
 </html
