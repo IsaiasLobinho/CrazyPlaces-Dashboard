@@ -630,7 +630,13 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
         <textarea id="v-script" rows="8" placeholder="Pegá el guión con marcadores:&#10;[1] Gran Cañón del Colorado...&#10;LUGAR 2: Atacama...&#10;Place 3 - Death Valley..."></textarea>
         <div class="row mt12">
           <button class="btn btn-p" data-action="detect-v-segs">🔍 Detectar Segmentos</button>
-          <button class="btn btn-v" id="btn-gen-all-v" data-action="gen-all-voices" disabled>🎙️ Generar Todo</button>
+        </div>
+        <div class="row mt8">
+          <button class="btn btn-v" id="btn-gen-es" data-action="gen-all-es" disabled>🇪🇸 Generar TODO ES</button>
+          <button class="btn btn-v" id="btn-gen-en" data-action="gen-all-en" disabled>🇺🇸 Generar TODO EN</button>
+        </div>
+        <div class="row mt8">
+          <button class="btn btn-p fw" id="btn-gen-all-v" data-action="gen-all-voices" disabled>🎙️ Generar TODO (ES + EN)</button>
         </div>
       </div>
       <div class="panel glass">
@@ -661,7 +667,7 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointe
         <div class="crrow"><span class="crk">Costo estimado (2 idiomas)</span><span class="crv" id="cr-est">—</span></div>
         <button class="btn btn-s btn-sm mt12" data-action="refresh-credits">↻ Actualizar</button>
       </div>
-      <button class="btn btn-s fw mb12" id="btn-zip" data-action="dl-zip" disabled>📦 Descargar todo en ZIP</button>
+      <button class="btn btn-p fw mb12" id="btn-zip" data-action="dl-zip" disabled style="background:linear-gradient(135deg,var(--ok) 0%,#059669 100%);color:#000">📦 Descargar ZIP completo</button>
       <div id="v-segs-list"></div>
     </div>
   </div>
@@ -838,6 +844,8 @@ function setupEvents() {
       'analyze-comp': () => analyzeCompetitor(el.dataset.vid),
       'run-verifier': runVerifier,
       'detect-v-segs': detectVoiceSegs, 'gen-all-voices': genAllVoices,
+      'gen-all-es': () => genAllVoicesLang('es'),
+      'gen-all-en': () => genAllVoicesLang('en'),
       'gen-seg': () => genSeg(parseInt(el.dataset.idx), el.dataset.lang || null),
       'dl-zip': dlZip, 'refresh-credits': refreshCredits,
       'gen-titles': genTitles,
@@ -1608,6 +1616,8 @@ function detectVoiceSegs() {
   renderVoiceSegs();
   updateCostEst();
   document.getElementById('btn-gen-all-v').disabled = false;
+  document.getElementById('btn-gen-es').disabled = false;
+  document.getElementById('btn-gen-en').disabled = false;
   document.getElementById('btn-zip').disabled = false;
   document.getElementById('cr-segs').textContent = valid.length;
   toast(`${valid.length} segmentos detectados`, 'success');
@@ -1663,7 +1673,25 @@ function renderVoiceSegs() {
 }
 
 async function genAllVoices() {
+  setVoiceBtns(true);
   for (let i = 0; i < CP.voices.segs.length; i++) { await genSeg(i, null); await sleep(400); }
+  setVoiceBtns(false);
+}
+
+async function genAllVoicesLang(lang) {
+  setVoiceBtns(true);
+  for (let i = 0; i < CP.voices.segs.length; i++) { await genSeg(i, lang); await sleep(300); }
+  setVoiceBtns(false);
+  // Auto-enable ZIP when done
+  document.getElementById('btn-zip').disabled = false;
+  toast(`Todo ${lang.toUpperCase()} generado ✓ — ZIP listo para descargar`, 'success');
+}
+
+function setVoiceBtns(disabled) {
+  ['btn-gen-all-v','btn-gen-es','btn-gen-en'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
 }
 
 async function genSeg(idx, lang) {
