@@ -1191,41 +1191,107 @@ function renderClipSegs() {
   ).join('');
 }
 
+function queriesLocales(nombre) {
+  // Queries de fallback generadas localmente (sin IA)
+  return [
+    nombre + ' documentary 4k',
+    nombre + ' drone footage',
+    nombre + ' aerial view',
+    nombre + ' cinematic'
+  ];
+}
+
+async function genQueriesLote(segs) {
+  // Genera queries con Claude para un lote de lugares (max 5 por llamada)
+  const segList = segs.map(s => `[${s.num}] ${s.name}`).join('\n');
+  try {
+    const qt = await callClaude(
+      [{ role: 'user', content: `Para estos lugares de un documental de Crazy Places, genera 4 queries de YouTube por lugar (inglés, de específico a general). Solo footage REAL, cinematográfico, sin videojuegos ni animación.\n\n${segList}\n\nJSON: [{"num":1,"queries":["q1","q2","q3","q4"]},...]` }],
+      'Generas queries de YouTube para footage documental real. Solo JSON válido, sin markdown.', 2500
+    );
+    return JSON.parse(qt.replace(/```json|```/g, '').trim());
+  } catch (e) {
+    // Fallback: queries locales para este lote
+    return segs.map(s => ({ num: s.num, queries: queriesLocales(s.name) }));
+  }
+}
+
 async function searchClips() {
   if (!CP.clips.segs.length) { toast('Sin segmentos detectados', 'warning'); return; }
   const btn = document.getElementById('btn-search-clips');
-  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Generando queries...';
+  btn.disabled = true;
+  let quotaError = false;
   try {
-    const segList = CP.clips.segs.map(s => `[${s.num}] ${s.name}`).join('\n');
-    const qt = await callClaude(
-      [{ role: 'user', content: `Para estos lugares de un documental de Crazy Places, genera 4 queries de YouTube por lugar (inglés, de específico a general). Solo footage REAL, cinematográfico, sin videojuegos ni animación.\n\n${segList}\n\nJSON: [{"num":1,"queries":["q1","q2","q3","q4"]},...]` }],
-      'Generas queries de YouTube para footage documental real. Solo JSON.', 1200
-    );
-    const queries = JSON.parse(qt.replace(/```json|```/g, '').trim());
-    btn.innerHTML = '<span class="spin"></span> Buscando en YouTube...';
+    // ── 1. Generar queries en LOTES de 5 lugares (evita truncar el JSON) ──
+    btn.innerHTML = '<span class="spin"></span> Generando queries...';
+    const todos = CP.clips.segs;
+    let queries = [];
+    for (let i = 0; i < todos.length; i += 5) {
+      const lote = todos.slice(i, i + 5);
+      btn.innerHTML = `<span class="spin"></span> Queries ${Math.min(i+5, todos.length)}/${todos.length}...`;
+      const qs = await genQueriesLote(lote);
+      queries = queries.concat(qs);
+    }
+
+    // Asegurar que TODOS los lugares tienen queries (fallback local)
+    for (const s of todos) {
+      if (!queries.find(q => q.num === s.num)) {
+        queries.push({ num: s.num, queries: queriesLocales(s.name) });
+      }
+    }
+
+    // ── 2. Buscar en YouTube ──
     CP.clips.results = {}; CP.clips.sel = new Set();
     const container = document.getElementById('clips-results');
     container.innerHTML = '';
-    for (const seg of queries) {
-      const name = CP.clips.segs.find(s => s.num === seg.num)?.name || `Lugar ${seg.num}`;
+    let conResultados = 0, sinResultados = 0;
+
+    for (let qi = 0; qi < queries.length; qi++) {
+      const seg = queries[qi];
+      const name = todos.find(s => s.num === seg.num)?.name || `Lugar ${seg.num}`;
+      btn.innerHTML = `<span class="spin"></span> Buscando ${qi+1}/${queries.length}: ${name.slice(0,20)}...`;
+
       let videos = [];
       for (const q of (seg.queries || [])) {
         try {
           const items = (await ytSearch(q, 8)).filter(isReal);
           videos = [...videos, ...items];
           if (videos.length >= 4) break;
-        } catch { continue; }
+        } catch (e) {
+          if (String(e.message).includes('403')) { quotaError = true; break; }
+          continue;
+        }
       }
+
       const seen = new Set();
       videos = videos.filter(v => { const id = v.id?.videoId; if (!id || seen.has(id)) return false; seen.add(id); return true; }).slice(0, 6);
       CP.clips.results[seg.num] = videos;
-      if (videos.length) container.insertAdjacentHTML('beforeend', renderClipBlock(seg.num, name, videos));
+
+      if (videos.length) {
+        container.insertAdjacentHTML('beforeend', renderClipBlock(seg.num, name, videos));
+        conResultados++;
+      } else {
+        // Mostrar el lugar SIN resultados para que se vea qué pasó
+        container.insertAdjacentHTML('beforeend',
+          `<div class="mb16"><div class="pt mb8">📍 [${seg.num}] ${esc(name)}</div>` +
+          `<div class="muted" style="padding:8px 12px;border:1px dashed var(--t3);border-radius:8px">` +
+          `Sin resultados${quotaError ? ' (cuota de YouTube agotada)' : ' — probá buscar manualmente en YouTube'}</div></div>`);
+        sinResultados++;
+      }
+
+      if (quotaError) break;
     }
+
     document.getElementById('btn-vision').disabled = false;
     document.getElementById('btn-export').disabled = false;
     document.getElementById('btn-dl-script').disabled = false;
     document.getElementById('btn-estimate').disabled = false;
-    toast('Búsqueda completada', 'success');
+
+    if (quotaError) {
+      toast(`Cuota de YouTube agotada. ${conResultados} lugares encontrados antes del límite.`, 'warning');
+    } else {
+      toast(`Búsqueda completa: ${conResultados} con clips, ${sinResultados} sin resultados`, sinResultados > 0 ? 'warning' : 'success');
+    }
   } catch (e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '▶ Buscar YouTube'; }
 }
