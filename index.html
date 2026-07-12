@@ -1993,7 +1993,7 @@ function genDlScript() {
     L.push(`:: --- ${blk.name} (${blk.urls.length} videos) ---`);
     L.push(`mkdir "${blk.folder}" 2>nul`);
     for (const vid of blk.urls) {
-      L.push(`%YD% -f "${fmt}"` + ` -o "${blk.folder}\\%(title)s.%(ext)s"` +
+      L.push(`%YD% -f "${fmt}"` + ` -o "${blk.folder}\\%%(title)s.%%(ext)s"` +
         ` --no-playlist --restrict-filenames --retries 3${meta}` +
         ` "https://www.youtube.com/watch?v=${vid}"`);
     }
