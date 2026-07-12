@@ -1140,6 +1140,9 @@ function detectClipSegs() {
   const text = document.getElementById('clips-script').value.trim();
   if (!text) { toast('Pegá un guión o lista de lugares', 'warning'); return; }
   const lines = text.split('\n');
+
+  // ── Método 1: marcadores explícitos [1], (1), LUGAR 1, 1. ──
+  // Solo cuenta como válido si los marcadores son CONSECUTIVOS empezando en 1
   const segs = [];
   for (const line of lines) {
     const t = line.trim();
@@ -1148,34 +1151,72 @@ function detectClipSegs() {
       if (m) { const name = (m[2] || '').replace(/\*+/g, '').trim(); if (name.length > 2) segs.push({ num: parseInt(m[1]), name }); break; }
     }
   }
-  if (!segs.length) {
-    let counter = 0;
-    for (const line of lines) {
-      const t = line.trim();
-      if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
-      if (isAllCapsHeader(t)) { counter++; segs.push({ num: counter, name: t.replace(/[.:,;!?]+$/, '').trim() }); }
-    }
+
+  // Validar que los marcadores forman una secuencia coherente
+  const nums = segs.map(s => s.num).sort((a,b) => a-b);
+  // Contar cuántos son consecutivos desde 1
+  let consecutivos = 0;
+  for (let i = 0; i < nums.length; i++) {
+    if (nums[i] === i + 1 || nums[i] === consecutivos + 1) consecutivos++;
   }
-  if (!segs.length) { detectSegsAI(text); return; }
-  CP.clips.segs = segs;
-  renderClipSegs();
-  document.getElementById('btn-search-clips').disabled = false;
-  toast(`${segs.length} lugares detectados`, 'success');
+  const esSecuenciaValida = segs.length >= 2 &&
+    nums[0] <= 2 &&                                    // empieza en 1 o 2
+    consecutivos >= Math.floor(segs.length * 0.6);    // 60%+ son consecutivos
+
+  if (esSecuenciaValida) {
+    // Renumerar en orden por si acaso
+    segs.sort((a,b) => a.num - b.num);
+    segs.forEach((s, i) => s.num = i + 1);
+    CP.clips.segs = segs;
+    renderClipSegs();
+    document.getElementById('btn-search-clips').disabled = false;
+    toast(`${segs.length} lugares detectados`, 'success');
+    return;
+  }
+
+  // ── Método 2: headers en MAYÚSCULAS ──
+  const capSegs = [];
+  let counter = 0;
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
+    if (isAllCapsHeader(t)) { counter++; capSegs.push({ num: counter, name: t.replace(/[.:,;!?]+$/, '').trim() }); }
+  }
+  if (capSegs.length >= 3) {
+    CP.clips.segs = capSegs;
+    renderClipSegs();
+    document.getElementById('btn-search-clips').disabled = false;
+    toast(`${capSegs.length} lugares detectados`, 'success');
+    return;
+  }
+
+  // ── Método 3: IA (para guiones de narración corrida) ──
+  // Este es el caso más común en Crazy Places
+  detectSegsAI(text);
 }
 
 async function detectSegsAI(text) {
-  toast('Usando IA para detectar segmentos...', 'info');
+  toast('Usando IA para detectar lugares...', 'info');
+  const btn = document.getElementById('btn-detect-segs') || document.querySelector('[data-action="detect-segs"]');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Detectando con IA...'; }
   try {
-    const lines = text.split('\n').map((l, i) => `${i+1}: ${l}`).join('\n');
     const r = await callClaude(
-      [{ role: 'user', content: `Detectá los lugares/secciones en este guión:\n${lines.slice(0,3000)}\n\nDevolvé SOLO JSON: [{"num":1,"name":"Nombre del lugar"},...]` }],
-      'Detectas lugares en guiones de documentales. Solo JSON válido, sin markdown.', 600
+      [{ role: 'user', content: `Este es un guión de un documental de "lugares extremos e imposibles". Identificá TODOS los lugares geográficos reales que se mencionan como tema principal de cada sección (montañas, puentes, carreteras, islas, cuevas, etc).\n\nGUION:\n${text.slice(0, 8000)}\n\nDevolvé SOLO un JSON array con todos los lugares en orden de aparición, sin omitir ninguno:\n[{"num":1,"name":"Nombre exacto del lugar"},{"num":2,"name":"..."}]` }],
+      'Sos experto en identificar lugares geográficos en guiones de documentales. Detectás TODOS los lugares mencionados, sin omitir ninguno. Respondés solo con JSON válido, sin markdown ni explicaciones.', 2000
     );
-    CP.clips.segs = JSON.parse(r.replace(/```json|```/g, '').trim());
+    const parsed = JSON.parse(r.replace(/```json|```/g, '').trim());
+    if (!parsed.length) { toast('La IA no detectó lugares. Revisá el guión.', 'warning'); return; }
+    // Renumerar en orden
+    parsed.forEach((s, i) => s.num = i + 1);
+    CP.clips.segs = parsed;
     renderClipSegs();
     document.getElementById('btn-search-clips').disabled = false;
     toast(`${CP.clips.segs.length} lugares detectados con IA`, 'success');
-  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  } catch (e) {
+    toast('Error detectando lugares: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Detectar Lugares'; }
+  }
 }
 
 function renderClipSegs() {
