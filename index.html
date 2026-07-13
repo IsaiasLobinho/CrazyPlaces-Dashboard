@@ -1973,7 +1973,6 @@ function genDlScript() {
   const totalVideos = segments.reduce((s,b) => s + b.urls.length, 0);
   const L = [];
   L.push('@echo off');
-  L.push('setlocal enabledelayedexpansion');
   L.push('chcp 65001 >nul');
   L.push('echo.');
   L.push('echo  CRAZY PLACES - Auto-Downloader');
@@ -1991,23 +1990,28 @@ function genDlScript() {
   L.push('mkdir crazy_places_downloads 2>nul');
   L.push('cd crazy_places_downloads');
   L.push('');
+  // SIN TEMPLATES DE YT-DLP: cada archivo recibe un nombre fijo generado aqui
+  // (video01.mp4, video02.mp4...) — cero simbolos % = cero problemas de batch
   for (const blk of segments) {
-    L.push(`:: --- ${blk.name} (${blk.urls.length} videos) ---`);
+    L.push(`:: === ${blk.name} (${blk.urls.length} videos) ===`);
     L.push(`mkdir "${blk.folder}" 2>nul`);
-    L.push(`pushd "${blk.folder}"`);
+    let vidNum = 0;
     for (const vid of blk.urls) {
-      L.push(`%YD% -f "${fmt}"` + ` -o "%%(title)s.%%(ext)s"` +
-        ` --no-playlist --restrict-filenames --retries 3${meta}` +
+      vidNum++;
+      const outName = 'video' + String(vidNum).padStart(2, '0') + '.mp4';
+      L.push(`echo Descargando ${blk.folder}/${outName}...`);
+      L.push(`%YD% -f "${fmt}"` + ` -o "${blk.folder}\\${outName}"` +
+        ` --no-playlist --retries 3${meta}` +
         ` "https://www.youtube.com/watch?v=${vid}"`);
     }
-    L.push('popd');
     L.push('');
   }
   L.push('cd ..');
   L.push('echo.');
   L.push('echo  Creando ZIP...');
   L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
-  L.push('echo  Listo. ZIP creado: crazy_places_downloads.zip');
+  L.push('echo.');
+  L.push('echo  LISTO. ZIP creado: crazy_places_downloads.zip');
   L.push('pause');
   _dlScript = L.join('\r\n');
   document.getElementById('dl-script-info').classList.remove('hidden');
