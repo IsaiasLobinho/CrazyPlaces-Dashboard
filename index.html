@@ -1992,17 +1992,31 @@ function genDlScript() {
   L.push('');
   // SIN TEMPLATES DE YT-DLP: cada archivo recibe un nombre fijo generado aqui
   // (video01.mp4, video02.mp4...) — cero simbolos % = cero problemas de batch
+  let totalIdx = 0;
   for (const blk of segments) {
     L.push(`:: === ${blk.name} (${blk.urls.length} videos) ===`);
     L.push(`mkdir "${blk.folder}" 2>nul`);
     let vidNum = 0;
     for (const vid of blk.urls) {
       vidNum++;
+      totalIdx++;
       const outName = 'video' + String(vidNum).padStart(2, '0') + '.mp4';
-      L.push(`echo Descargando ${blk.folder}/${outName}...`);
-      L.push(`%YD% -f "${fmt}"` + ` -o "${blk.folder}\\${outName}"` +
-        ` --no-playlist --retries 3${meta}` +
-        ` "https://www.youtube.com/watch?v=${vid}"`);
+      L.push(`echo [${totalIdx}/${totalVideos}] ${blk.folder}/${outName}`);
+      // Si el archivo ya existe, saltar (permite reanudar si se corta)
+      L.push(`if exist "${blk.folder}\\${outName}" (`);
+      L.push(`  echo   Ya existe, saltando...`);
+      L.push(`) else (`);
+      // || echo hace que si falla, siga con el siguiente en vez de frenar todo
+      L.push(`  %YD% -f "${fmt}"` + ` -o "${blk.folder}\\${outName}"` +
+        ` --no-playlist --retries 5 --retry-sleep 5 --sleep-interval 2 --max-sleep-interval 6${meta}` +
+        ` "https://www.youtube.com/watch?v=${vid}"` +
+        ` || echo   FALLO: ${blk.folder}/${outName} >> ..\\fallos.txt`);
+      L.push(`)`);
+      // Pausa cada 10 videos para no saturar a YouTube
+      if (totalIdx % 10 === 0) {
+        L.push('echo   Pausa de 15 segundos (anti-limite de YouTube)...');
+        L.push('timeout /t 15 /nobreak >nul');
+      }
     }
     L.push('');
   }
@@ -2012,6 +2026,11 @@ function genDlScript() {
   L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
   L.push('echo.');
   L.push('echo  LISTO. ZIP creado: crazy_places_downloads.zip');
+  L.push('if exist fallos.txt (');
+  L.push('  echo.');
+  L.push('  echo  ATENCION: Algunos videos fallaron. Lista en fallos.txt');
+  L.push('  echo  Ejecuta este .bat de nuevo para reintentar solo los que faltan.');
+  L.push(')');
   L.push('pause');
   _dlScript = L.join('\r\n');
   document.getElementById('dl-script-info').classList.remove('hidden');
