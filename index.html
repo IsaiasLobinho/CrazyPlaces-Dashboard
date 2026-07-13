@@ -1973,6 +1973,2104 @@ function genDlScript() {
   const totalVideos = segments.reduce((s,b) => s + b.urls.length, 0);
   const L = [];
   L.push('@echo off');
+  L.push('setlocal enabledelayedexpansion');
+  L.push('chcp 65001 >nul');
+  L.push('echo.');
+  L.push('echo  CRAZY PLACES - Auto-Downloader');
+  L.push('echo  Total: ' + totalVideos + ' videos en ' + segments.length + ' carpetas');
+  L.push('echo.');
+  L.push('where yt-dlp >nul 2>&1');
+  L.push('if %errorlevel% neq 0 (');
+  L.push('  if exist "%~dp0yt-dlp.exe" ( set "YD=%~dp0yt-dlp.exe" ) else (');
+  L.push('    echo ERROR: yt-dlp no encontrado. Instalar con: pip install yt-dlp');
+  L.push('    pause');
+  L.push('    exit /b 1');
+  L.push('  )');
+  L.push(') else ( set "YD=yt-dlp" )');
+  L.push('%YD% -U');
+  L.push('mkdir crazy_places_downloads 2>nul');
+  L.push('cd crazy_places_downloads');
+  L.push('');
+  for (const blk of segments) {
+    L.push(`:: --- ${blk.name} (${blk.urls.length} videos) ---`);
+    L.push(`mkdir "${blk.folder}" 2>nul`);
+    L.push(`pushd "${blk.folder}"`);
+    for (const vid of blk.urls) {
+      L.push(`%YD% -f "${fmt}"` + ` -o "%%(title)s.%%(ext)s"` +
+        ` --no-playlist --restrict-filenames --retries 3${meta}` +
+        ` "https://www.youtube.com/watch?v=${vid}"`);
+    }
+    L.push('popd');
+    L.push('');
+  }
+  L.push('cd ..');
+  L.push('echo.');
+  L.push('echo  Creando ZIP...');
+  L.push("powershell -NoProfile -Command \"Compress-Archive -Path 'crazy_places_downloads' -DestinationPath 'crazy_places_downloads.zip' -Force\"");
+  L.push('echo  Listo. ZIP creado: crazy_places_downloads.zip');
+  L.push('pause');
+  _dlScript = L.join('\r\n');
+  document.getElementById('dl-script-info').classList.remove('hidden');
+  document.getElementById('dl-script-summary').textContent = `${segments.length} carpetas · ${totalVideos} videos · ${cfg.audio==='no'?'sin audio':'con audio'} · ${cfg.noAv1?'sin AV1':'todos formatos'}`;
+  toast('Script .bat generado ✓', 'success');
+}
+
+function downloadDlScript() {
+  if (!_dlScript) { toast('Genera el script primero', 'warning'); return; }
+  const blob = new Blob([_dlScript], { type: 'text/plain' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'crazy_places_download.bat'; a.click();
+  toast('Script .bat descargado', 'success');
+}
+
+// ── SERVER LOCAL ──────────────────────────────────────────────
+const SERVER = 'http://localhost:8765';
+var _srvConnected = false;
+var _progressInterval = null;
+
+function checkServer() {
+  fetch(SERVER + '/status', { signal: AbortSignal.timeout(1500) })
+    .then(r => r.json())
+    .then(() => {
+      _srvConnected = true;
+      document.getElementById('srv-dot').className = 'dot ok';
+      document.getElementById('srv-label').textContent = 'Servidor ✓';
+      const btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.remove('hidden');
+    })
+    .catch(() => {
+      _srvConnected = false;
+      document.getElementById('srv-dot').className = 'dot err';
+      document.getElementById('srv-label').textContent = 'Servidor offline';
+      const btn = document.getElementById('btn-direct-dl');
+      if (btn) btn.classList.add('hidden');
+    });
+}
+
+async function directDownload() {
+  if (!_srvConnected) { toast('Servidor offline. Ejecutá iniciar_servidor.bat primero.', 'error'); return; }
+  const segments = collectSegments();
+  if (!segments.length) { toast('Sin videos encontrados', 'warning'); return; }
+  const cfg = getDlConfig();
+  try {
+    const r = await fetch(SERVER + '/download', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments, format: buildFormat(cfg), metaFlags: buildMetaFlags(cfg) })
+    });
+    const d = await r.json();
+    if (d.error) { toast('Error: ' + d.error, 'error'); return; }
+    toast('Descarga iniciada: ' + d.total + ' videos', 'success');
+    document.getElementById('dl-progress-panel').classList.remove('hidden');
+    startProgressPolling();
+  } catch(e) { toast('Error conectando al servidor: ' + e.message, 'error'); }
+}
+
+function startProgressPolling() {
+  if (_progressInterval) clearInterval(_progressInterval);
+  _progressInterval = setInterval(() => {
+    fetch(SERVER + '/progress').then(r => r.json()).then(p => {
+      const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+      document.getElementById('dl-pfill').style.width = pct + '%';
+      document.getElementById('dl-progress-text').textContent = `${p.done}/${p.total} videos${p.current ? ' — ' + p.current : ''}`;
+      if (p.log?.length) {
+        const logEl = document.getElementById('dl-log');
+        logEl.textContent = p.log.slice(-20).join('\n');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      if (p.status === 'done') {
+        clearInterval(_progressInterval);
+        document.getElementById('dl-progress-text').textContent = '✅ Descarga completa. ZIP creado en Downloads.';
+        document.getElementById('btn-open-folder').classList.remove('hidden');
+        toast('Descarga completa ✓', 'success');
+      }
+    }).catch(() => clearInterval(_progressInterval));
+  }, 1500);
+}
+
+function openDlFolder() { fetch(SERVER + '/open-folder').catch(() => {}); }
+
+// ── ADMIN ────────────────────────────────────────────────────
+async function createUser() {
+  if (CP.prof?.role !== 'admin') { toast('Solo admins pueden crear usuarios', 'error'); return; }
+  const email   = document.getElementById('a-email').value.trim();
+  const pass    = document.getElementById('a-pass').value;
+  const role    = document.getElementById('a-role').value;
+  const credits = parseInt(document.getElementById('a-credits').value) || 200;
+  if (!email || !pass) { toast('Email y contraseña requeridos', 'warning'); return; }
+  const svcKey = CP.cfg.supabase_svc;
+  if (!svcKey) { toast('Configurá la Service Role Key en ⚙️ → Avanzado', 'warning'); return; }
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': svcKey, 'Authorization': `Bearer ${svcKey}` },
+      body: JSON.stringify({ email, password: pass, email_confirm: true })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.error_description || 'Error al crear usuario');
+    await CP.sb.from('profiles').update({ role, tts_credits: credits }).eq('id', data.id);
+    toast(`Usuario ${email} creado`, 'success');
+    document.getElementById('a-email').value = '';
+    document.getElementById('a-pass').value = '';
+    await loadUsers();
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function loadUsers() {
+  if (CP.prof?.role !== 'admin') return;
+  const { data } = await CP.sb.from('profiles').select('*').order('created_at');
+  const el = document.getElementById('admin-users');
+  if (!el) return;
+  if (!data?.length) { el.innerHTML = '<span class="muted">Sin usuarios</span>'; return; }
+  const now = Date.now();
+  el.innerHTML = `<table class="dtbl"><thead><tr><th>Email</th><th>Rol</th><th>Créditos</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>` +
+    data.map(u => {
+      const online = u.last_seen && (now - new Date(u.last_seen).getTime()) < 600000;
+      return `<tr><td>${esc(u.email||'—')}</td>` +
+        `<td><span class="badge b-${u.role||'collaborator'}">${u.role||'collaborator'}</span></td>` +
+        `<td><input type="number" id="cred-${u.id}" value="${u.tts_credits||0}" min="0" style="width:64px;padding:3px 7px">` +
+        `<button class="btn btn-s btn-sm" data-action="save-credits" data-id="${u.id}">✓</button></td>` +
+        `<td style="color:${online?'var(--ok)':'var(--t3)'}">${online?'● Online':'○ Offline'}${u.disabled?' <span class="badge b-discarded">Desact.</span>':''}</td>` +
+        `<td><button class="btn btn-sm ${u.disabled?'btn-ok':'btn-d'}" data-action="toggle-user" data-id="${u.id}" data-dis="${u.disabled}">${u.disabled?'Activar':'Desact.'}</button>` +
+        `<button class="btn btn-s btn-sm" data-action="change-role" data-id="${u.id}" data-role="${u.role==='admin'?'collaborator':'admin'}">${u.role==='admin'?'→ Colab.':'→ Admin'}</button></td></tr>`;
+    }).join('') + '</tbody></table>';
+}
+
+async function toggleUser(id, isDisabled) {
+  await CP.sb.from('profiles').update({ disabled: !isDisabled }).eq('id', id);
+  await loadUsers();
+  toast(`Usuario ${!isDisabled?'desactivado':'activado'}`, 'success');
+}
+async function changeRole(id, newRole) {
+  await CP.sb.from('profiles').update({ role: newRole }).eq('id', id);
+  await loadUsers();
+  toast(`Rol → ${newRole}`, 'success');
+}
+async function saveCredits(id) {
+  const input = document.getElementById(`cred-${id}`);
+  if (!input) return;
+  await CP.sb.from('profiles').update({ tts_credits: parseInt(input.value)||0 }).eq('id', id);
+  toast('Créditos actualizados', 'success');
+}
+
+// ── UTILS ─────────────────────────────────────────────────────
+function esc(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escA(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+async function copyTxt(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copiado ✓', 'success'); }
+  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Copiado ✓', 'success'); }
+}
+</script>
+</body>
+</html.bg-w{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.bg-g{position:absolute;inset:0;
+  background:radial-gradient(ellipse 60% 40% at 15% 60%,rgba(0,210,200,.07) 0%,transparent 70%),
+  radial-gradient(ellipse 50% 50% at 85% 20%,rgba(124,58,237,.08) 0%,transparent 70%),
+  linear-gradient(160deg,var(--bg0) 0%,var(--bg1) 100%)}
+.bg-grid{position:absolute;inset:-50%;width:200%;height:200%;
+  background-image:linear-gradient(rgba(0,210,200,.022) 1px,transparent 1px),
+  linear-gradient(90deg,rgba(0,210,200,.022) 1px,transparent 1px);
+  background-size:48px 48px;animation:gm 60s linear infinite}
+@keyframes gm{to{transform:translate(48px,48px)}}
+
+.glass{background:var(--gl);border:1px solid var(--glb);border-radius:var(--r);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.glass-xl{background:rgba(255,255,255,.05);border:1px solid rgba(0,210,200,.15);border-radius:16px;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 0 48px rgba(0,210,200,.04)}
+
+#app-login{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center}
+.lcard{width:360px;padding:40px}
+.lbrand{text-align:center;margin-bottom:30px}
+.lbrand .lico{font-size:52px;display:block;margin-bottom:10px}
+.lbrand h1{font-size:19px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;
+  background:linear-gradient(135deg,var(--c1) 0%,var(--c2) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.lbrand p{font-size:10px;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;margin-top:4px}
+
+.fg{margin-bottom:13px}
+.fg label{display:block;font-size:11px;color:var(--t2);letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px}
+input[type=text],input[type=email],input[type=password],input[type=number],
+input[type=url],textarea,select{
+  width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+  border-radius:7px;padding:9px 13px;color:var(--t1);font-size:13px;font-family:inherit;
+  outline:none;transition:border-color .2s,box-shadow .2s}
+input:focus,textarea:focus,select:focus{border-color:var(--c1);box-shadow:0 0 0 3px rgba(0,210,200,.1)}
+textarea{resize:vertical;min-height:110px}
+select option{background:#0c1120}
+input[type=range]{flex:1;accent-color:var(--c1);height:4px}
+input[type=checkbox]{width:15px;height:15px;accent-color:var(--c1);cursor:pointer;flex-shrink:0}
+
+.btn{display:inline-flex;align-items:center;gap:5px;padding:9px 18px;border-radius:7px;border:none;
+  font-size:13px;font-weight:600;cursor:pointer;transition:all .18s;white-space:nowrap;font-family:inherit}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-p{background:linear-gradient(135deg,var(--c1) 0%,#0098ff 100%);color:#000;box-shadow:0 4px 14px rgba(0,210,200,.25)}
+.btn-p:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,210,200,.35)}
+.btn-s{background:rgba(255,255,255,.07);color:var(--t1);border:1px solid rgba(255,255,255,.1)}
+.btn-s:hover:not(:disabled){background:rgba(255,255,255,.12)}
+.btn-v{background:linear-gradient(135deg,var(--c2) 0%,#5b21b6 100%);color:#fff}
+.btn-v:hover:not(:disabled){transform:translateY(-1px)}
+.btn-d{background:rgba(239,68,68,.12);color:var(--err);border:1px solid rgba(239,68,68,.2)}
+.btn-d:hover:not(:disabled){background:rgba(239,68,68,.22)}
+.btn-ok{background:rgba(16,185,129,.12);color:var(--ok);border:1px solid rgba(16,185,129,.2)}
+.btn-ok:hover:not(:disabled){background:rgba(16,185,129,.22)}
+.btn-sm{padding:5px 11px;font-size:11px;border-radius:6px}
+.btn-fw{width:100%;justify-content:center}
+
+#app-main{display:none}
+.navbar{position:fixed;top:0;left:0;right:0;z-index:90;height:55px;
+  background:rgba(4,8,15,.88);backdrop-filter:blur(20px);
+  border-bottom:1px solid rgba(0,210,200,.07);
+  display:flex;align-items:center;gap:2px;padding:0 12px;overflow-x:auto}
+.navbar::-webkit-scrollbar{height:2px}
+.nbrand{font-size:12px;font-weight:800;letter-spacing:.16em;
+  background:linear-gradient(135deg,var(--c1) 0%,var(--c2) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-right:10px;flex-shrink:0}
+.nb{padding:5px 9px;border-radius:6px;border:none;background:transparent;color:var(--t2);
+  font-size:11px;font-weight:500;cursor:pointer;transition:all .18s;font-family:inherit;
+  white-space:nowrap;flex-shrink:0}
+.nb:hover{background:rgba(255,255,255,.06);color:var(--t1)}
+.nb.active{background:rgba(0,210,200,.1);color:var(--c1)}
+.navr{margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0}
+.uchip{font-size:11px;color:var(--t2);padding:3px 8px;background:rgba(255,255,255,.05);border-radius:5px}
+
+.mc{margin-top:55px;padding:22px 18px;max-width:1200px;margin-left:auto;margin-right:auto;position:relative;z-index:1}
+.sv{display:none}.sv.active{display:block}
+
+.sh{margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.st{font-size:20px;font-weight:700;background:linear-gradient(135deg,var(--t1) 0%,var(--t2) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.ss{font-size:12px;color:var(--t2);margin-top:2px}
+
+.sgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:18px}
+@media(max-width:700px){.sgrid{grid-template-columns:repeat(2,1fr)}}
+.sc{padding:17px;position:relative;overflow:hidden}
+.sc::before{content:'';position:absolute;top:-10px;right:-10px;width:65px;height:65px;border-radius:50%;opacity:.12}
+.sc[data-c=teal]::before{background:var(--c1)}.sc[data-c=purple]::before{background:var(--c2)}
+.sc[data-c=amber]::before{background:var(--c3)}.sc[data-c=green]::before{background:var(--ok)}
+.sc-ico{font-size:19px;margin-bottom:9px}
+.sc-v{font-size:27px;font-weight:700;line-height:1}
+[data-c=teal] .sc-v{color:var(--c1)}[data-c=purple] .sc-v{color:var(--c2)}
+[data-c=amber] .sc-v{color:var(--c3)}[data-c=green] .sc-v{color:var(--ok)}
+.sc-l{font-size:10px;color:var(--t2);margin-top:3px;text-transform:uppercase;letter-spacing:.05em}
+
+.chips{display:flex;gap:9px;flex-wrap:wrap}
+.chip{display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:20px;
+  font-size:11px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--t3)}
+.dot.ok{background:var(--ok);box-shadow:0 0 5px var(--ok)}
+.dot.err{background:var(--err);box-shadow:0 0 5px var(--err)}
+
+.tabs{display:flex;gap:3px;margin-bottom:16px;background:rgba(255,255,255,.03);padding:3px;border-radius:8px}
+.tb{flex:1;padding:7px 12px;border-radius:6px;border:none;background:transparent;color:var(--t2);
+  font-size:12px;font-weight:500;cursor:pointer;transition:all .18s;font-family:inherit}
+.tb.active{background:rgba(0,210,200,.1);color:var(--c1)}
+.tp{display:none}.tp.active{display:block}
+
+.panel{padding:17px;margin-bottom:13px}
+.pt{font-size:11px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;
+  margin-bottom:11px;display:flex;align-items:center;gap:8px}
+
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:768px){.g2,.g3{grid-template-columns:1fr}}
+
+.rc{padding:11px 13px;display:flex;align-items:flex-start;gap:10px;margin-bottom:7px}
+.rc-thumb{width:80px;height:52px;object-fit:cover;border-radius:5px;flex-shrink:0;background:rgba(255,255,255,.05)}
+.rc-body{flex:1;min-width:0}
+.rc-title{font-size:12px;font-weight:500;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rc-meta{font-size:11px;color:var(--t2);margin-top:3px}
+.rc-acts{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+
+.badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.b-usar{background:rgba(16,185,129,.15);color:var(--ok)}
+.b-revisar{background:rgba(245,158,11,.15);color:var(--c3)}
+.b-descartar{background:rgba(239,68,68,.15);color:var(--err)}
+.b-pending{background:rgba(100,116,139,.2);color:var(--t2)}
+.b-approved{background:rgba(16,185,129,.15);color:var(--ok)}
+.b-discarded{background:rgba(239,68,68,.15);color:var(--err)}
+.b-draft{background:rgba(124,58,237,.15);color:#a78bfa}
+
+.vseg{padding:13px;margin-bottom:9px}
+.vseg-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+.vseg-lbl{font-size:11px;font-weight:700;color:var(--c1);text-transform:uppercase;letter-spacing:.08em}
+.vseg-ch{font-size:11px;color:var(--t2)}
+.vseg-txt{font-size:12px;color:var(--t2);margin-bottom:9px;max-height:64px;overflow:hidden;line-height:1.5}
+.lgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.li{padding:8px 10px;border-radius:7px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;gap:6px}
+.lst{font-size:11px;color:var(--t2)}
+.lst.done{color:var(--ok)}.lst.err{color:var(--err)}.lst.proc{color:var(--c3)}
+
+.crrow{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px}
+.crrow:last-child{border-bottom:none}
+.crk{color:var(--t2)}.crv{font-weight:600;color:var(--c1)}
+
+.tvcard{padding:13px;margin-bottom:7px}
+.tvfmt{font-size:10px;font-weight:600;color:var(--c2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
+.tvtitle{font-size:14px;font-weight:600;color:var(--t1);margin-bottom:7px}
+
+.dtbl{width:100%;border-collapse:collapse;font-size:12px}
+.dtbl th{text-align:left;padding:8px 11px;color:var(--t2);font-size:10px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid rgba(255,255,255,.07)}
+.dtbl td{padding:9px 11px;border-bottom:1px solid rgba(255,255,255,.04)}
+.dtbl tr:hover td{background:rgba(255,255,255,.02)}
+
+.pbar{height:3px;border-radius:2px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:7px}
+.pfill{height:100%;border-radius:2px;transition:width .3s;background:linear-gradient(90deg,var(--c1) 0%,var(--c2) 100%)}
+
+#tc{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:7px;z-index:200}
+.toast{padding:10px 15px;border-radius:8px;font-size:12px;font-weight:500;backdrop-filter:blur(20px);
+  min-width:210px;max-width:310px;animation:tIn .25s ease;border:1px solid}
+.t-info{background:rgba(0,210,200,.1);border-color:rgba(0,210,200,.3);color:var(--c1)}
+.t-success{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:var(--ok)}
+.t-error{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:var(--err)}
+.t-warning{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:var(--c3)}
+@keyframes tIn{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
+
+.mo{position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.75);backdrop-filter:blur(5px);
+  display:none;align-items:center;justify-content:center;padding:18px}
+.mo.open{display:flex}
+.modal{width:560px;max-width:100%;max-height:88vh;overflow-y:auto;padding:25px}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.modal-title{font-size:16px;font-weight:700}
+.modal-x{background:none;border:none;color:var(--t2);font-size:17px;cursor:pointer;padding:3px}
+
+.spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(0,210,200,.2);
+  border-top-color:var(--c1);border-radius:50%;animation:rot .7s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+.empty{text-align:center;padding:42px 16px;color:var(--t2)}
+.empty-ico{font-size:36px;margin-bottom:9px}
+.empty-t{font-size:14px;font-weight:600;color:var(--t1);margin-bottom:4px}
+.empty-s{font-size:12px}
+
+.row{display:flex;gap:9px;align-items:flex-start;flex-wrap:wrap}
+.rowc{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.mla{margin-left:auto}
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt20{margin-top:20px}
+.mb8{margin-bottom:8px}.mb12{margin-bottom:12px}
+.cc1{color:var(--c1)}.cok{color:var(--ok)}.cerr{color:var(--err)}.cwarn{color:var(--c3)}
+.muted{color:var(--t2);font-size:12px}
+.mono{font-family:'SF Mono','Fira Code',monospace;font-size:12px}
+.fw{width:100%}
+.hr{border:none;border-top:1px solid rgba(255,255,255,.06);margin:13px 0}
+.srow{display:flex;align-items:center;gap:10px}
+.sval{font-size:12px;font-weight:600;color:var(--c1);min-width:32px;text-align:right}
+</style>
+</head>
+<body>
+<div class="bg-w"><div class="bg-g"></div><div class="bg-grid"></div></div>
+<div id="tc"></div>
+
+<!-- CONFIG MODAL -->
+<div class="mo" id="mo-cfg">
+<div class="modal glass-xl">
+  <div class="modal-hd">
+    <span class="modal-title">⚙️ Configuración</span>
+    <button class="modal-x" data-action="close-mo" data-mo="mo-cfg">✕</button>
+  </div>
+  <div class="tabs" data-tg="cfg">
+    <button class="tb active" data-tab="cfg-api" data-tg="cfg">APIs</button>
+    <button class="tb" data-tab="cfg-voices" data-tg="cfg">Voces</button>
+    <button class="tb" data-tab="cfg-prompts" data-tg="cfg">Prompts</button>
+    <button class="tb" data-tab="cfg-desc" data-tg="cfg">Descripción</button>
+    <button class="tb" data-tab="cfg-adv" data-tg="cfg">Avanzado</button>
+  </div>
+  <div id="cfg-api" class="tp tg-cfg active">
+    <div class="fg"><label>Anthropic API Key</label><input type="password" id="c-ant" placeholder="sk-ant-..."></div>
+    <div class="fg"><label>YouTube Data API Key</label><input type="password" id="c-yt" placeholder="AIza..."></div>
+    <div class="fg"><label>AI33 API Key</label><input type="password" id="c-ai33" placeholder="..."></div>
+    <div class="fg"><label>Email Admin</label><input type="email" id="c-adm" placeholder="admin@email.com"></div>
+  </div>
+  <div id="cfg-voices" class="tp tg-cfg">
+    <div class="g2">
+      <div class="fg"><label>🇪🇸 Voice ID Español</label><input type="text" id="c-ves" placeholder="voice_id_es..."></div>
+      <div class="fg"><label>🇺🇸 Voice ID Inglés</label><input type="text" id="c-ven" placeholder="voice_id_en..."></div>
+    </div>
+    <p class="muted mt8">Los Voice IDs se obtienen desde tu panel de AI33.</p>
+  </div>
+  <div id="cfg-prompts" class="tp tg-cfg">
+    <div class="fg"><label>Nombre</label><input type="text" id="c-pname" placeholder="Prompt Maestro ES"></div>
+    <div class="fg"><label>Contenido</label><textarea id="c-pcontent" rows="7" placeholder="Sos un guionista cinematográfico..."></textarea></div>
+    <button class="btn btn-p btn-sm mt8" data-action="save-prompt">Guardar Prompt</button>
+    <div id="prompts-cfg-list" class="mt16"></div>
+  </div>
+  <div id="cfg-desc" class="tp tg-cfg">
+    <div class="fg"><label>Boilerplate de Descripción (bloque fijo)</label>
+    <textarea id="c-boiler" rows="9" placeholder="🌍 Crazy Places es un canal sobre los lugares más extremos e imposibles del mundo...&#10;&#10;► Suscribite: https://youtube.com/..."></textarea></div>
+    <p class="muted">Este bloque se agrega al final de cada descripción generada.</p>
+  </div>
+  <div id="cfg-adv" class="tp tg-cfg">
+    <div class="fg"><label>Supabase URL (si necesitás cambiarla)</label><input type="text" id="c-sburl" placeholder="https://xxx.supabase.co"></div>
+    <div class="fg"><label>Supabase Anon Key</label><input type="password" id="c-sbanonk" placeholder="eyJ..."></div>
+    <div class="fg"><label>Supabase Service Role Key (para crear usuarios)</label><input type="password" id="c-svc" placeholder="eyJ..."></div>
+    <p class="muted mt8">⚠️ La Service Key permite crear/modificar usuarios. Solo la configura el admin.</p>
+  </div>
+  <div class="row mt20">
+    <button class="btn btn-p" data-action="save-cfg">💾 Guardar</button>
+    <button class="btn btn-s" data-action="close-mo" data-mo="mo-cfg">Cancelar</button>
+  </div>
+</div>
+</div>
+
+<!-- LOGIN -->
+<div id="app-login">
+<div class="lcard glass-xl">
+  <div class="lbrand">
+    <span class="lico">🌍</span>
+    <h1>Crazy Places</h1>
+    <p>Production Dashboard</p>
+  </div>
+  <div class="fg"><label>Email</label><input type="email" id="l-email" placeholder="tu@email.com" autocomplete="username"></div>
+  <div class="fg"><label>Contraseña</label><input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password"></div>
+  <button class="btn btn-p btn-fw mt12" id="l-btn" data-action="login">Ingresar al Dashboard</button>
+</div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app-main">
+<nav class="navbar">
+  <span class="nbrand">🌍 CRAZY PLACES</span>
+  <button class="nb active" data-action="nav" data-sec="home">🏠 Inicio</button>
+  <button class="nb" data-action="nav" data-sec="clips">🎬 Clips</button>
+  <button class="nb" data-action="nav" data-sec="scripts">📝 Guiones</button>
+  <button class="nb" data-action="nav" data-sec="ideas">💡 Ideas</button>
+  <button class="nb" data-action="nav" data-sec="verifier">✅ Verificador</button>
+  <button class="nb" data-action="nav" data-sec="voices">🎙️ Voces</button>
+  <button class="nb" data-action="nav" data-sec="titles">🏷️ Títulos</button>
+  <div class="navr">
+    <button class="nb hidden" id="nav-admin" data-action="nav" data-sec="admin">👤 Admin</button>
+    <span class="uchip" id="u-email"></span>
+    <div id="srv-chip" class="chip" title="Servidor local de descarga" style="cursor:pointer" data-action="check-server">
+      <div class="dot" id="srv-dot"></div><span id="srv-label">Servidor</span>
+    </div>
+    <button class="btn btn-s btn-sm" data-action="open-cfg">⚙️</button>
+    <button class="btn btn-s btn-sm" data-action="logout">Salir</button>
+  </div>
+</nav>
+<div class="mc">
+
+<!-- ═══ HOME ═══ -->
+<div id="s-home" class="sv active">
+  <div class="sh">
+    <div><div class="st">Dashboard de Producción</div><div class="ss">Crazy Places · ES · EN</div></div>
+    <button class="btn btn-s btn-sm" data-action="load-dash">↻ Actualizar</button>
+  </div>
+  <div class="sgrid">
+    <div class="sc glass" data-c="teal"><div class="sc-ico">💡</div><div class="sc-v" id="stat-ideas">—</div><div class="sc-l">Ideas guardadas</div></div>
+    <div class="sc glass" data-c="purple"><div class="sc-ico">📝</div><div class="sc-v" id="stat-scripts">—</div><div class="sc-l">Guiones</div></div>
+    <div class="sc glass" data-c="amber"><div class="sc-ico">🎙️</div><div class="sc-v" id="stat-tts">—</div><div class="sc-l">Créditos TTS</div></div>
+    <div class="sc glass" data-c="green"><div class="sc-ico">👥</div><div class="sc-v" id="stat-colabs">—</div><div class="sc-l">Colaboradores</div></div>
+  </div>
+  <div class="g2">
+    <div class="panel glass">
+      <div class="pt">Estado de APIs</div>
+      <div class="chips">
+        <div class="chip"><div class="dot" id="dot-ant"></div>Anthropic</div>
+        <div class="chip"><div class="dot" id="dot-yt"></div>YouTube</div>
+        <div class="chip"><div class="dot" id="dot-ai33"></div>AI33 TTS</div>
+        <div class="chip"><div class="dot ok" id="dot-sb"></div>Supabase</div>
+      </div>
+      <button class="btn btn-s btn-sm mt12" data-action="check-apis">Verificar APIs</button>
+    </div>
+    <div class="panel glass">
+      <div class="pt">Prompts guardados</div>
+      <div id="dash-prompts" class="muted">Cargando...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ CLIPS ═══ -->
+<div id="s-clips" class="sv">
+  <div class="sh">
+    <div><div class="st">🎬 Buscador de Clips</div><div class="ss">Detecta lugares en el guión · Busca footage real en YouTube</div></div>
+  </div>
+  <div class="g2" style="align-items:start">
+    <div>
+      <div class="panel glass mb12">
+        <div class="pt">Guión / Lista de lugares</div>
+        <textarea id="clips-script" rows="9" placeholder="Pegá el guión completo o lista de lugares:&#10;&#10;[1] Gran Cañón del Colorado&#10;LUGAR 2: Atacama&#10;Place 3 - Death Valley&#10;4. Desierto de Namib"></textarea>
+        <div class="row mt12">
+          <button class="btn btn-p" data-action="detect-segs">🔍 Detectar Lugares</button>
+          <button class="btn btn-s" id="btn-search-clips" data-action="search-clips" disabled>▶ Buscar YouTube</button>
+        </div>
+      </div>
+      <div id="clips-segs-panel" class="panel glass hidden">
+        <div class="pt">Lugares detectados</div>
+        <div id="clips-segs-list"></div>
+      </div>
+    </div>
+    <div>
+      <!-- CONFIG PANEL -->
+      <div class="panel glass mb12" style="border-color:rgba(0,210,200,.15)">
+        <div class="pt">⚙️ Config de Descarga</div>
+        <div class="g2 mb8">
+          <div class="fg"><label>Calidad máxima</label>
+          <select id="dl-quality">
+            <option value="1080">1080p (recomendado)</option>
+            <option value="720">720p</option>
+            <option value="best">Mejor disponible</option>
+          </select></div>
+          <div class="fg"><label>Audio</label>
+          <select id="dl-audio">
+            <option value="no">Sin audio — solo video</option>
+            <option value="yes">Con audio</option>
+          </select></div>
+        </div>
+        <div class="g2 mb12">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+            <input type="checkbox" id="dl-no-av1" checked>
+            <span>Excluir AV1 <span class="muted">(para Premiere)</span></span></label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+            <input type="checkbox" id="dl-no-meta" checked>
+            <span>Sin metadatos ni descripciones</span></label>
+        </div>
+        <div class="rowc">
+          <button class="btn btn-s btn-sm" id="btn-estimate" data-action="estimate-size" disabled>📊 Estimar peso</button>
+          <span id="size-estimate" class="muted"></span>
+        </div>
+      </div>
+      <!-- ACTIONS -->
+      <div class="panel glass mb12">
+        <div class="pt">Acciones</div>
+        <div class="row">
+          <button class="btn btn-v btn-sm" id="btn-vision" data-action="analyze-vision" disabled>🤖 Analizar con IA</button>
+          <button class="btn btn-s btn-sm" id="btn-export" data-action="export-links" disabled>📋 Exportar .txt</button>
+          <button class="btn btn-ok btn-sm" id="btn-dl-script" data-action="gen-dl-script" disabled>📥 Script yt-dlp</button>
+        </div>
+      </div>
+      <div id="dl-progress-panel" class="panel glass hidden" style="border-color:rgba(0,210,200,.2)">
+        <div class="pt cc1">🚀 Descarga en progreso</div>
+        <div class="pbar mb8"><div class="pfill" id="dl-pfill" style="width:0%"></div></div>
+        <div id="dl-progress-text" class="muted mb8">Iniciando...</div>
+        <div id="dl-log" style="font-size:11px;font-family:monospace;color:var(--t2);max-height:140px;overflow-y:auto;background:rgba(0,0,0,.3);border-radius:6px;padding:8px"></div>
+        <div class="row mt12">
+          <button class="btn btn-ok btn-sm hidden" id="btn-open-folder" data-action="open-dl-folder">📁 Abrir carpeta</button>
+        </div>
+      </div>
+      <div id="dl-script-info" class="panel glass hidden" style="border-color:rgba(16,185,129,.2)">
+        <div class="pt cok">📥 Script de Descarga</div>
+        <p class="muted mb12">Organiza videos en carpetas por lugar y crea un ZIP. Ejecutalo en tu PC.</p>
+        <div style="font-size:11px;color:var(--t2);background:rgba(0,0,0,.3);border-radius:6px;padding:10px;font-family:monospace;margin-bottom:12px">1. Descargar el .bat<br>2. Doble click para ejecutar<br>3. Crea carpetas + ZIP automaticamente</div>
+        <div id="dl-script-summary" class="muted mb12"></div>
+        <button class="btn btn-ok btn-sm" data-action="download-dl-script">⬇️ Descargar .bat</button>
+      </div>
+      <div id="clips-results">
+        <div class="empty glass" style="border-radius:10px">
+          <div class="empty-ico">🎬</div>
+          <div class="empty-t">Sin resultados</div>
+          <div class="empty-s">Detectá lugares y ejecutá la búsqueda</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SCRIPTS ═══ -->
+<div id="s-scripts" class="sv">
+  <div class="sh">
+    <div><div class="st">📝 Generador de Guiones</div><div class="ss">Estilo cinematográfico · 15,000–18,000 caracteres</div></div>
+  </div>
+  <div class="tabs" data-tg="scripts">
+    <button class="tb active" data-tab="scr-own" data-tg="scripts">Guión Propio</button>
+    <button class="tb" data-tab="scr-ref" data-tg="scripts">Con Referencia</button>
+    <button class="tb" data-tab="scr-saved" data-tg="scripts">Guardados</button>
+  </div>
+  <div id="scr-own" class="tp tg-scripts active">
+    <div class="g2" style="align-items:start">
+      <div class="panel glass">
+        <div class="fg"><label>Lugar / Tema del documental</label>
+        <input type="text" id="scr-topic" placeholder="El Triángulo de las Bermudas · Sus misterios sin resolver"></div>
+        <div class="g2">
+          <div class="fg"><label>Idioma</label>
+          <select id="scr-lang"><option value="es">🇪🇸 Español</option><option value="en">🇺🇸 Inglés</option></select></div>
+          <div class="fg"><label>N° de secciones/lugares</label>
+          <input type="number" id="scr-n" value="5" min="2" max="15"></div>
+        </div>
+        <div class="fg"><label>Prompt base</label>
+        <div class="row" style="gap:7px">
+          <select id="scr-psel" style="flex:1"><option value="default">Prompt Maestro (built-in)</option></select>
+          <button class="btn btn-s btn-sm" data-action="load-prompt-scr">Cargar</button>
+        </div></div>
+        <div class="fg"><label>Instrucciones adicionales</label>
+        <textarea id="scr-extra" rows="3" placeholder="Enfocate en el misterio. Tono David Attenborough..."></textarea></div>
+        <div class="row mt12">
+          <button class="btn btn-p" id="btn-gen-scr" data-action="gen-script">✨ Generar Guión</button>
+          <button class="btn btn-s btn-sm" id="btn-save-scr" data-action="save-script" data-which="own" disabled>💾 Guardar</button>
+          <button class="btn btn-v btn-sm" id="btn-to-v-own" data-action="send-to-voices" data-which="own" disabled>🎙️ → Voces</button>
+        </div>
+      </div>
+      <div class="panel glass" style="min-height:280px">
+        <div class="pt">Guión generado <span id="scr-chars" class="mla mono"></span></div>
+        <div id="scr-output">
+          <div class="empty" style="padding:30px 0"><div class="empty-ico">📝</div><div class="empty-s">Completá los campos y generá</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="scr-ref" class="tp tg-scripts">
+    <div class="g2" style="align-items:start">
+      <div class="panel glass">
+        <div class="fg"><label>Transcripción / Guión de referencia</label>
+        <textarea id="scr-ref-in" rows="10" placeholder="Pegá el guión o transcripción de referencia..."></textarea></div>
+        <div class="fg"><label>Idioma a generar</label>
+        <select id="scr-ref-lang"><option value="es">🇪🇸 Español</option><option value="en">🇺🇸 Inglés</option></select></div>
+        <div class="fg"><label>Instrucción extra</label>
+        <textarea id="scr-ref-extra" rows="2" placeholder="Cambiá el lugar central, mantené el suspense..."></textarea></div>
+        <div class="row mt12">
+          <button class="btn btn-p" id="btn-gen-ref" data-action="gen-script-ref">✨ Generar Adaptación</button>
+          <button class="btn btn-s btn-sm" id="btn-save-ref" data-action="save-script" data-which="ref" disabled>💾 Guardar</button>
+          <button class="btn btn-v btn-sm" id="btn-to-v-ref" data-action="send-to-voices" data-which="ref" disabled>🎙️ → Voces</button>
+        </div>
+      </div>
+      <div class="panel glass" style="min-height:280px">
+        <div class="pt">Guión adaptado <span id="scr-ref-chars" class="mla mono"></span></div>
+        <div id="scr-ref-output">
+          <div class="empty" style="padding:30px 0"><div class="empty-ico">📝</div><div class="empty-s">Pegá una referencia y generá</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="scr-saved" class="tp tg-scripts">
+    <div id="scr-saved-list">
+      <div class="empty"><div class="empty-ico">📁</div><div class="empty-t">Sin guiones</div><div class="empty-s">Guardá un guión para verlo aquí</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ IDEAS ═══ -->
+<div id="s-ideas" class="sv">
+  <div class="sh">
+    <div><div class="st">💡 Banco de Ideas</div><div class="ss">Lugares extremos, imposibles o misteriosos</div></div>
+  </div>
+  <div class="tabs" data-tg="ideas">
+    <button class="tb active" data-tab="id-gen" data-tg="ideas">Generar</button>
+    <button class="tb" data-tab="id-comp" data-tg="ideas">Competencia</button>
+    <button class="tb" data-tab="id-saved" data-tg="ideas">Guardadas</button>
+  </div>
+  <div id="id-gen" class="tp tg-ideas active">
+    <div class="panel glass">
+      <div class="g2">
+        <div class="fg"><label>Enfoque</label>
+        <select id="id-focus">
+          <option value="lugares imposibles de alcanzar">Lugares imposibles de alcanzar</option>
+          <option value="lugares más peligrosos del mundo">Los más peligrosos del mundo</option>
+          <option value="lugares abandonados misteriosos">Abandonados y misteriosos</option>
+          <option value="condiciones extremas de supervivencia">Condiciones extremas</option>
+          <option value="lugares prohibidos o secretos">Prohibidos o secretos</option>
+          <option value="cuevas y mundos subterráneos">Cuevas y mundo subterráneo</option>
+          <option value="lugares bajo el agua">Bajo el agua</option>
+          <option value="libre">Libre (sin filtro de nicho)</option>
+        </select></div>
+        <div class="fg"><label>Cantidad</label><input type="number" id="id-count" value="10" min="5" max="30"></div>
+      </div>
+      <div class="fg"><label>Idioma</label>
+      <select id="id-lang"><option value="es">🇪🇸 Español</option><option value="en">🇺🇸 Inglés</option></select></div>
+      <div class="row mt12">
+        <button class="btn btn-p" id="btn-gen-ideas" data-action="gen-ideas">✨ Generar Ideas</button>
+        <button class="btn btn-s btn-sm" id="btn-save-ideas" data-action="save-ideas" disabled>💾 Guardar seleccionadas</button>
+      </div>
+    </div>
+    <div id="id-gen-list" class="mt12"></div>
+  </div>
+  <div id="id-comp" class="tp tg-ideas">
+    <div class="panel glass">
+      <div class="g2">
+        <div class="fg"><label>Búsqueda en YouTube</label>
+        <input type="text" id="id-comp-q" placeholder="impossible places documentary 4K"></div>
+        <div class="fg"><label>Resultados</label><input type="number" id="id-comp-n" value="12" min="5" max="25"></div>
+      </div>
+      <button class="btn btn-p mt12" id="btn-search-comp" data-action="search-comp">🔍 Buscar</button>
+    </div>
+    <div id="id-comp-list" class="mt12"></div>
+  </div>
+  <div id="id-saved" class="tp tg-ideas">
+    <div class="rowc mb12">
+      <button class="btn btn-s btn-sm" data-action="reload-ideas">↻ Recargar</button>
+      <div class="mla rowc">
+        <span class="muted">Filtrar:</span>
+        <select id="id-filter" style="width:auto">
+          <option value="all">Todas</option>
+          <option value="pending">Pendientes</option>
+          <option value="approved">Aprobadas</option>
+          <option value="discarded">Descartadas</option>
+        </select>
+      </div>
+    </div>
+    <div id="id-saved-list">
+      <div class="empty"><div class="empty-ico">💡</div><div class="empty-t">Sin ideas guardadas</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ VERIFIER ═══ -->
+<div id="s-verifier" class="sv">
+  <div class="sh">
+    <div><div class="st">✅ Verificador de Ideas</div><div class="ss">Evalúa viabilidad · VPH · Score de demanda</div></div>
+    <button class="btn btn-p" id="btn-run-ver" data-action="run-verifier">▶ Ejecutar</button>
+  </div>
+  <div class="panel glass mb12">
+    <div class="pt">Ideas pendientes</div>
+    <div id="ver-ideas" class="muted">Cargando...</div>
+    <div class="pbar hidden" id="ver-pbar"><div class="pfill" id="ver-pfill" style="width:0%"></div></div>
+    <div id="ver-status" class="muted mt8"></div>
+  </div>
+  <div id="ver-results"></div>
+</div>
+
+<!-- ═══ VOICES ═══ -->
+<div id="s-voices" class="sv">
+  <div class="sh">
+    <div><div class="st">🎙️ Generador de Voces</div><div class="ss">AI33 TTS · 🇪🇸 ES · 🇺🇸 EN</div></div>
+  </div>
+  <div class="g2" style="align-items:start">
+    <div>
+      <div class="panel glass mb12">
+        <div class="pt">Guión</div>
+        <textarea id="v-script" rows="8" placeholder="Pegá el guión con marcadores:&#10;[1] Gran Cañón del Colorado...&#10;LUGAR 2: Atacama...&#10;Place 3 - Death Valley..."></textarea>
+        <div class="row mt12">
+          <button class="btn btn-p" data-action="detect-v-segs">🔍 Detectar Segmentos</button>
+        </div>
+        <div class="row mt8">
+          <button class="btn btn-v" id="btn-gen-es" data-action="gen-all-es" disabled>🇪🇸 Generar TODO ES</button>
+          <button class="btn btn-v" id="btn-gen-en" data-action="gen-all-en" disabled>🇺🇸 Generar TODO EN</button>
+        </div>
+        <div class="row mt8">
+          <button class="btn btn-p fw" id="btn-gen-all-v" data-action="gen-all-voices" disabled>🎙️ Generar TODO (ES + EN)</button>
+        </div>
+      </div>
+      <div class="panel glass">
+        <div class="pt">Configuración de Audio</div>
+        <div class="fg"><label>Velocidad</label>
+        <div class="srow"><input type="range" id="v-speed" min="0.7" max="1.3" step="0.05" value="1.0"><span class="sval" id="v-speed-v">1.0</span></div></div>
+        <div class="g2 mt12">
+          <div class="fg"><label>Estabilidad</label>
+          <div class="srow"><input type="range" id="v-stab" min="0" max="1" step="0.1" value="0.5"><span class="sval" id="v-stab-v">0.5</span></div></div>
+          <div class="fg"><label>Similitud</label>
+          <div class="srow"><input type="range" id="v-sim" min="0" max="1" step="0.1" value="0.75"><span class="sval" id="v-sim-v">0.75</span></div></div>
+        </div>
+        <div class="g2 mt8">
+          <div class="fg"><label>Estilo</label>
+          <div class="srow"><input type="range" id="v-style" min="0" max="1" step="0.1" value="0.3"><span class="sval" id="v-style-v">0.3</span></div></div>
+          <div class="fg" style="padding-top:18px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="v-boost" checked><span>Speaker Boost</span></label></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="panel glass mb12">
+        <div class="pt">💳 Créditos AI33</div>
+        <div class="crrow"><span class="crk">Disponibles (AI33 live)</span><span class="crv" id="cr-ai33">—</span></div>
+        <div class="crrow"><span class="crk">Créditos internos</span><span class="crv" id="cr-int">—</span></div>
+        <div class="crrow"><span class="crk">Segmentos detectados</span><span class="crv" id="cr-segs">0</span></div>
+        <div class="crrow"><span class="crk">Costo estimado (2 idiomas)</span><span class="crv" id="cr-est">—</span></div>
+        <button class="btn btn-s btn-sm mt12" data-action="refresh-credits">↻ Actualizar</button>
+      </div>
+      <button class="btn btn-p fw mb12" id="btn-zip" data-action="dl-zip" disabled style="background:linear-gradient(135deg,var(--ok) 0%,#059669 100%);color:#000">📦 Descargar ZIP completo</button>
+      <div id="v-segs-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TITLES ═══ -->
+<div id="s-titles" class="sv">
+  <div class="sh">
+    <div><div class="st">🏷️ Títulos y Descripciones</div><div class="ss">6 variantes A/B · Descripción en 2 bloques</div></div>
+  </div>
+  <div class="g2" style="align-items:start">
+    <div class="panel glass">
+      <div class="fg"><label>Lugar / Tema del video</label>
+      <input type="text" id="t-topic" placeholder="El Triángulo de las Bermudas"></div>
+      <div class="fg"><label>Resumen del video (2-3 oraciones)</label>
+      <textarea id="t-summary" rows="4" placeholder="Un documental sobre los misterios y desapariciones en esta zona del Atlántico. Exploramos las teorías más perturbadoras..."></textarea></div>
+      <div class="fg"><label>Idioma</label>
+      <select id="t-lang"><option value="es">🇪🇸 Español</option><option value="en">🇺🇸 Inglés</option></select></div>
+      <button class="btn btn-p mt12" id="btn-gen-titles" data-action="gen-titles">✨ Generar Títulos y Descripción</button>
+    </div>
+    <div id="titles-out">
+      <div class="empty glass" style="border-radius:10px">
+        <div class="empty-ico">🏷️</div>
+        <div class="empty-t">Sin resultados</div>
+        <div class="empty-s">Completá el formulario y generá</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ADMIN ═══ -->
+<div id="s-admin" class="sv">
+  <div class="sh">
+    <div><div class="st">👤 Administración</div><div class="ss">Gestión de colaboradores</div></div>
+  </div>
+  <div class="g2" style="align-items:start">
+    <div class="panel glass">
+      <div class="pt">Crear usuario</div>
+      <div class="fg"><label>Email</label><input type="email" id="a-email" placeholder="colaborador@email.com"></div>
+      <div class="fg"><label>Contraseña inicial</label><input type="password" id="a-pass" placeholder="••••••••"></div>
+      <div class="g2">
+        <div class="fg"><label>Rol</label>
+        <select id="a-role"><option value="collaborator">Colaborador</option><option value="admin">Admin</option></select></div>
+        <div class="fg"><label>Créditos TTS</label><input type="number" id="a-credits" value="200" min="0"></div>
+      </div>
+      <button class="btn btn-p mt12" data-action="create-user">+ Crear Usuario</button>
+    </div>
+    <div class="panel glass">
+      <div class="pt">Usuarios <button class="btn btn-s btn-sm mla" data-action="reload-users">↻</button></div>
+      <div id="admin-users" class="muted">Cargando...</div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /mc -->
+</div><!-- /app-main -->
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// CRAZY PLACES — Dashboard v1.0
+// ══════════════════════════════════════════════════════════════
+
+const SUPABASE_URL = localStorage.getItem('cp_sb_url') || 'https://oygvjhmmqsqjndybfvct.supabase.co';
+const SUPABASE_KEY = localStorage.getItem('cp_sb_key') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z3ZqaG1tcXNxam5keWJmdmN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NjY4MTYsImV4cCI6MjA5ODI0MjgxNn0.wFLVA6BSwzt0z_JTHYP_lr8bwXVnGVxEkDNByKZye4U';
+
+const CP = {
+  sb: null, user: null, prof: null, cfg: {}, sec: 'home',
+  clips: { segs: [], results: {}, sel: new Set() },
+  voices: { segs: [], audio: {} },
+  scripts: { own: '', ref: '', saved: [] },
+  ideas: { gen: [], saved: [], comp: [] },
+  prompts: []
+};
+
+document.addEventListener('DOMContentLoaded', async () => {
+  setupEvents();
+  try {
+    CP.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const { data: { session } } = await CP.sb.auth.getSession();
+    if (session) { CP.user = session.user; await postLogin(); }
+  } catch(e) {
+    toast('Error de conexión: ' + (e.message || e), 'error');
+    console.error('Init error:', e);
+  }
+});
+
+// ── AUTH ─────────────────────────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById('l-email').value.trim();
+  const pass  = document.getElementById('l-pass').value;
+  if (!email || !pass) { toast('Completá email y contraseña', 'warning'); return; }
+  if (!CP.sb) { toast('Supabase no inicializado', 'error'); return; }
+  const btn = document.getElementById('l-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Ingresando...';
+  try {
+    const { data, error } = await CP.sb.auth.signInWithPassword({ email, password: pass });
+    if (error) throw error;
+    CP.user = data.user;
+    await postLogin();
+  } catch (e) {
+    toast(e.message || 'Error al iniciar sesión', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Ingresar al Dashboard';
+  }
+}
+
+async function postLogin() {
+  const { data: prof } = await CP.sb.from('profiles').select('*').eq('id', CP.user.id).single();
+  if (!prof) { toast('Error cargando perfil', 'error'); return; }
+  if (prof.disabled) { await CP.sb.auth.signOut(); toast('Cuenta desactivada', 'error'); return; }
+  CP.prof = prof;
+  const { data: cfgRows } = await CP.sb.from('config').select('*');
+  if (cfgRows) cfgRows.forEach(r => { CP.cfg[r.key] = r.value; });
+  CP.sb.from('profiles').update({ last_seen: new Date().toISOString() }).eq('id', CP.user.id).then(() => {});
+  document.getElementById('app-login').style.display = 'none';
+  document.getElementById('app-main').style.display = 'block';
+  document.getElementById('u-email').textContent = CP.user.email.split('@')[0];
+  if (CP.prof.role === 'admin') document.getElementById('nav-admin').classList.remove('hidden');
+  checkServer();
+  setInterval(checkServer, 8000);
+  showSec('home');
+}
+
+async function doLogout() {
+  await CP.sb.auth.signOut();
+  document.getElementById('app-main').style.display = 'none';
+  document.getElementById('app-login').style.display = 'flex';
+  CP.user = null; CP.prof = null; CP.cfg = {};
+  toast('Sesión cerrada', 'info');
+}
+
+// ── NAVIGATION ───────────────────────────────────────────────
+function showSec(name) {
+  CP.sec = name;
+  document.querySelectorAll('.sv').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nb[data-sec]').forEach(b => b.classList.remove('active'));
+  const el = document.getElementById('s-' + name);
+  if (el) el.classList.add('active');
+  const nb = document.querySelector(`.nb[data-sec="${name}"]`);
+  if (nb) nb.classList.add('active');
+  if (name === 'home')     loadDash();
+  if (name === 'scripts')  loadSavedScripts();
+  if (name === 'ideas')    loadIdeas();
+  if (name === 'verifier') loadVerifierIdeas();
+  if (name === 'admin' && CP.prof?.role === 'admin') loadUsers();
+}
+
+// ── EVENTS ───────────────────────────────────────────────────
+function setupEvents() {
+  document.addEventListener('click', async e => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const isInput = el.tagName === 'INPUT' || (el.tagName === 'A' && el.href);
+    if (!isInput) e.preventDefault();
+    const a = el.dataset.action;
+    const map = {
+      'login': doLogin, 'logout': doLogout,
+      'nav': () => showSec(el.dataset.sec),
+      'open-cfg': openCfg, 'save-cfg': saveCfg,
+      'close-mo': () => closeMo(el.dataset.mo),
+      'load-dash': loadDash, 'check-apis': checkApis,
+      'detect-segs': detectClipSegs, 'search-clips': searchClips,
+      'analyze-vision': analyzeVision, 'export-links': exportLinks,
+      'remove-seg': () => { CP.clips.segs.splice(parseInt(el.dataset.idx), 1); renderClipSegs(); },
+      'gen-script': genScript, 'gen-script-ref': genScriptRef,
+      'save-script': () => saveScript(el.dataset.which),
+      'send-to-voices': () => sendToVoices(el.dataset.which),
+      'load-prompt-scr': loadPromptToScript,
+      'delete-script': () => deleteScript(el.dataset.id),
+      'gen-ideas': genIdeas, 'save-ideas': saveIdeas,
+      'search-comp': searchComp, 'reload-ideas': loadIdeas,
+      'idea-to-script': () => ideaToScript(el.dataset.title),
+      'update-idea': () => updateIdea(el.dataset.id, el.dataset.st),
+      'analyze-comp': () => analyzeCompetitor(el.dataset.vid),
+      'run-verifier': runVerifier,
+      'detect-v-segs': detectVoiceSegs, 'gen-all-voices': genAllVoices,
+      'gen-all-es': () => genAllVoicesLang('es'),
+      'gen-all-en': () => genAllVoicesLang('en'),
+      'gen-seg': () => genSeg(parseInt(el.dataset.idx), el.dataset.lang || null),
+      'dl-zip': dlZip, 'refresh-credits': refreshCredits,
+      'gen-titles': genTitles,
+      'copy-txt': () => copyTxt(el.dataset.txt),
+      'save-prompt': savePrompt, 'delete-prompt': () => deletePrompt(el.dataset.id),
+      'gen-dl-script': genDlScript,
+      'download-dl-script': downloadDlScript,
+      'direct-download': directDownload,
+      'check-server': checkServer,
+      'open-dl-folder': openDlFolder,
+      'estimate-size': estimateSize,
+      'create-user': createUser, 'reload-users': loadUsers,
+      'toggle-user': () => toggleUser(el.dataset.id, el.dataset.dis === 'true'),
+      'change-role': () => changeRole(el.dataset.id, el.dataset.role),
+      'save-credits': () => saveCredits(el.dataset.id)
+    };
+    const fn = map[a];
+    if (fn) await fn();
+  });
+
+  document.addEventListener('click', e => {
+    const tb = e.target.closest('.tb[data-tab]');
+    if (!tb) return;
+    const tg = tb.dataset.tg || tb.closest('[data-tg]')?.dataset.tg;
+    if (!tg) return;
+    const tabsCont = tb.closest('[data-tg]');
+    if (tabsCont) tabsCont.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll(`.tg-${tg}`).forEach(p => p.classList.remove('active'));
+    tb.classList.add('active');
+    const pane = document.getElementById(tb.dataset.tab);
+    if (pane) pane.classList.add('active');
+  });
+
+  document.addEventListener('input', e => {
+    if (e.target.type === 'range') {
+      const v = document.getElementById(e.target.id + '-v');
+      if (v) v.textContent = e.target.value;
+    }
+  });
+
+  document.getElementById('l-pass')?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  document.getElementById('id-filter')?.addEventListener('change', renderSavedIdeas);
+  document.addEventListener('change', e => {
+    const el = e.target;
+    if (el.dataset.action === 'select-clip') {
+      if (el.checked) CP.clips.sel.add(el.dataset.url);
+      else CP.clips.sel.delete(el.dataset.url);
+    }
+  });
+}
+
+// ── TOAST / MODAL ────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const tc = document.getElementById('tc');
+  const t = document.createElement('div');
+  t.className = `toast t-${type}`; t.textContent = msg;
+  tc.appendChild(t);
+  setTimeout(() => t.remove(), 3800);
+}
+function openMo(id) { document.getElementById(id)?.classList.add('open'); }
+function closeMo(id) { document.getElementById(id)?.classList.remove('open'); }
+
+// ── CONFIG ───────────────────────────────────────────────────
+function openCfg() {
+  const f = (id, key) => { const el = document.getElementById(id); if (el) el.value = CP.cfg[key] || ''; };
+  f('c-ant','anthropic_key'); f('c-yt','youtube_key'); f('c-ai33','ai33_key');
+  f('c-adm','admin_email'); f('c-ves','voice_es'); f('c-ven','voice_en');
+  f('c-boiler','desc_boilerplate'); f('c-svc','supabase_svc');
+  const sbUrlEl = document.getElementById('c-sburl');
+  const sbKeyEl = document.getElementById('c-sbanonk');
+  if (sbUrlEl) sbUrlEl.value = localStorage.getItem('cp_sb_url') || SUPABASE_URL;
+  if (sbKeyEl) sbKeyEl.value = localStorage.getItem('cp_sb_key') || '';
+  renderPromptsCfg();
+  openMo('mo-cfg');
+}
+
+async function saveCfg() {
+  const pairs = [
+    ['c-ant','anthropic_key'],['c-yt','youtube_key'],['c-ai33','ai33_key'],
+    ['c-adm','admin_email'],['c-ves','voice_es'],['c-ven','voice_en'],
+    ['c-boiler','desc_boilerplate'],['c-svc','supabase_svc']
+  ];
+  try {
+    for (const [elId, key] of pairs) {
+      const val = document.getElementById(elId)?.value.trim();
+      if (!val) continue;
+      await CP.sb.from('config').upsert({ key, value: val, updated_at: new Date().toISOString() });
+      CP.cfg[key] = val;
+    }
+    closeMo('mo-cfg');
+    toast('Configuración guardada', 'success');
+    loadDash();
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ── PROMPTS ──────────────────────────────────────────────────
+async function loadPrompts() {
+  const { data } = await CP.sb.from('prompts').select('*').order('created_at');
+  CP.prompts = data || [];
+  updatePromptSelectors();
+}
+function updatePromptSelectors() {
+  const sel = document.getElementById('scr-psel');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="default">Prompt Maestro (built-in)</option>';
+  CP.prompts.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name; sel.appendChild(o);
+  });
+  if (cur) sel.value = cur;
+}
+function renderDashPrompts() {
+  const el = document.getElementById('dash-prompts');
+  if (!el) return;
+  if (!CP.prompts.length) { el.innerHTML = '<span class="muted">Sin prompts. Configurá en ⚙️</span>'; return; }
+  el.innerHTML = CP.prompts.map(p => `<div class="rowc mb8"><span>📄 ${esc(p.name)}</span></div>`).join('');
+}
+function renderPromptsCfg() {
+  const el = document.getElementById('prompts-cfg-list');
+  if (!el) return;
+  if (!CP.prompts.length) { el.innerHTML = '<span class="muted">Sin prompts guardados</span>'; return; }
+  el.innerHTML = '<hr class="hr">' + CP.prompts.map(p =>
+    `<div class="rowc mb8"><span class="muted" style="flex:1">${esc(p.name)}</span>` +
+    `<button class="btn btn-d btn-sm" data-action="delete-prompt" data-id="${p.id}">🗑️</button></div>`
+  ).join('');
+}
+async function savePrompt() {
+  const name = document.getElementById('c-pname').value.trim();
+  const content = document.getElementById('c-pcontent').value.trim();
+  if (!name || !content) { toast('Completá nombre y contenido', 'warning'); return; }
+  const { error } = await CP.sb.from('prompts').insert({ name, content, created_by: CP.user.id });
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  document.getElementById('c-pname').value = '';
+  document.getElementById('c-pcontent').value = '';
+  await loadPrompts(); renderPromptsCfg();
+  toast('Prompt guardado', 'success');
+}
+async function deletePrompt(id) {
+  if (!confirm('¿Eliminar este prompt?')) return;
+  await CP.sb.from('prompts').delete().eq('id', id);
+  await loadPrompts(); renderPromptsCfg();
+  toast('Prompt eliminado', 'info');
+}
+function loadPromptToScript() {
+  const sel = document.getElementById('scr-psel').value;
+  if (sel === 'default') return;
+  const p = CP.prompts.find(x => x.id === sel);
+  if (p) { document.getElementById('scr-extra').value = p.content; toast(`Prompt "${p.name}" cargado`, 'success'); }
+}
+
+// ── API HELPERS ───────────────────────────────────────────────
+async function callClaude(messages, system, maxTok = 1000) {
+  const key = CP.cfg.anthropic_key;
+  if (!key) throw new Error('Anthropic key no configurada. Ir a ⚙️');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok, system, messages })
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `Claude ${res.status}`); }
+  const d = await res.json();
+  return d.content[0]?.text || '';
+}
+
+async function ytSearch(query, maxRes = 10) {
+  const key = CP.cfg.youtube_key;
+  if (!key) throw new Error('YouTube key no configurada');
+  const p = new URLSearchParams({ part: 'snippet', q: query, maxResults: maxRes, type: 'video', videoDuration: 'medium', key });
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/search?${p}`);
+  if (!res.ok) throw new Error(`YouTube ${res.status}`);
+  return (await res.json()).items || [];
+}
+
+function isReal(video) {
+  const s = ((video.snippet?.title || '') + ' ' + (video.snippet?.description || '') + ' ' + (video.snippet?.channelTitle || '')).toLowerCase();
+  return !['minecraft','roblox','gta','fortnite','simulation','simulator','gameplay','animation','animated','cartoon','disney','pixar','toy','lego','ai generated','#shorts'].some(w => s.includes(w));
+}
+
+// ── AI33 TTS (v3 API — xi-api-key + FormData) ────────────────
+async function ai33Gen(text, voiceId) {
+  const key = CP.cfg.ai33_key;
+  if (!key) throw new Error('AI33 key no configurada. Ir a ⚙️');
+  const speed = parseFloat(document.getElementById('v-speed')?.value || 1);
+  const fd = new FormData();
+  fd.append('text', text);
+  fd.append('voice_id', voiceId);
+  fd.append('speed', Math.min(1.5, Math.max(0.5, speed)).toString());
+  fd.append('with_transcript', 'false');
+  const res = await fetch('https://api.ai33.pro/v3/text-to-speech', {
+    method: 'POST',
+    headers: { 'xi-api-key': key },
+    body: fd
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.message || e.error || `AI33 error ${res.status}`);
+  }
+  const d = await res.json();
+  if (!d.success) throw new Error(d.message || 'AI33: success=false');
+  return d.task_id;
+}
+
+async function ai33Poll(taskId) {
+  const key = CP.cfg.ai33_key;
+  for (let i = 0; i < 90; i++) {
+    await sleep(2000);
+    const r = await fetch(`https://api.ai33.pro/v1/task/${taskId}`, {
+      headers: { 'xi-api-key': key }
+    });
+    if (!r.ok) { await sleep(2000); continue; }
+    const d = await r.json();
+    if (d.status === 'done') {
+      const url = d.metadata?.audio_url;
+      if (!url) throw new Error('AI33: done pero sin audio_url');
+      return url;
+    }
+    if (d.status === 'failed') throw new Error('AI33 task failed: ' + (d.error_message || ''));
+  }
+  throw new Error('AI33 timeout (3 min)');
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── DASHBOARD ────────────────────────────────────────────────
+async function loadDash() {
+  if (!CP.user) return;
+  try {
+    const [{ count: ic }, { count: sc }, { data: profs }] = await Promise.all([
+      CP.sb.from('ideas').select('*', { count: 'exact', head: true }),
+      CP.sb.from('scripts').select('*', { count: 'exact', head: true }),
+      CP.sb.from('profiles').select('*')
+    ]);
+    document.getElementById('stat-ideas').textContent = ic ?? '—';
+    document.getElementById('stat-scripts').textContent = sc ?? '—';
+    document.getElementById('stat-tts').textContent = CP.prof?.tts_credits ?? '—';
+    document.getElementById('stat-colabs').textContent = profs?.filter(p => !p.disabled).length ?? '—';
+    updateApiDots();
+    await loadPrompts(); renderDashPrompts();
+  } catch (e) { console.error(e); }
+}
+
+function updateApiDots() {
+  const has = k => !!CP.cfg[k];
+  document.getElementById('dot-ant').className = 'dot ' + (has('anthropic_key') ? 'ok' : 'err');
+  document.getElementById('dot-yt').className  = 'dot ' + (has('youtube_key') ? 'ok' : 'err');
+  document.getElementById('dot-ai33').className = 'dot ' + (has('ai33_key') ? 'ok' : 'err');
+}
+
+async function checkApis() {
+  toast('Verificando APIs...', 'info');
+  try {
+    await callClaude([{ role: 'user', content: 'hi' }], 'Reply: ok', 10);
+    document.getElementById('dot-ant').className = 'dot ok';
+  } catch(e) { document.getElementById('dot-ant').className = 'dot err'; }
+  try {
+    await ytSearch('test', 1);
+    document.getElementById('dot-yt').className = 'dot ok';
+  } catch(e) { document.getElementById('dot-yt').className = 'dot err'; }
+  try {
+    if (!CP.cfg.ai33_key) throw new Error('no key');
+    const r = await fetch('https://api.ai33.pro/v1/health-check', {
+      headers: { 'xi-api-key': CP.cfg.ai33_key }
+    });
+    document.getElementById('dot-ai33').className = r.ok ? 'dot ok' : 'dot err';
+  } catch(e) { document.getElementById('dot-ai33').className = 'dot err'; }
+  toast('Verificación completa', 'success');
+}
+
+// ── CLIPS ────────────────────────────────────────────────────
+const SEGS_RX = [
+  /^\[(\d+)\]\s*[:.-]?\s*(.*)/,
+  /^\((\d+)\)\s*[:.-]?\s*(.*)/,
+  /^(?:LUGAR|PLACE|PUESTO|TOP|SECCIÓN|SECTION|RANK)\s+(\d+)\s*[:.-]?\s*(.*)/i,
+  /^(\d+)[.)]\s+(.*)/
+];
+function isAllCapsHeader(line) {
+  const t = line.trim();
+  if (t.length < 4 || t.length > 80) return false;
+  if (/^[-=*_]{2,}$/.test(t) || t.length < 4) return false;
+  const letters = t.replace(/[^a-zA-Z]/g, '');
+  if (letters.length < 3) return false;
+  return (t.replace(/[^A-Z]/g, '').length / letters.length) >= 0.85;
+}
+
+function detectClipSegs() {
+  const text = document.getElementById('clips-script').value.trim();
+  if (!text) { toast('Pegá un guión o lista de lugares', 'warning'); return; }
+  const lines = text.split('\n');
+
+  // ── Método 1: marcadores explícitos [1], (1), LUGAR 1, 1. ──
+  // Solo cuenta como válido si los marcadores son CONSECUTIVOS empezando en 1
+  const segs = [];
+  for (const line of lines) {
+    const t = line.trim();
+    for (const rx of SEGS_RX) {
+      const m = t.match(rx);
+      if (m) { const name = (m[2] || '').replace(/\*+/g, '').trim(); if (name.length > 2) segs.push({ num: parseInt(m[1]), name }); break; }
+    }
+  }
+
+  // Validar que los marcadores forman una secuencia coherente
+  const nums = segs.map(s => s.num).sort((a,b) => a-b);
+  // Contar cuántos son consecutivos desde 1
+  let consecutivos = 0;
+  for (let i = 0; i < nums.length; i++) {
+    if (nums[i] === i + 1 || nums[i] === consecutivos + 1) consecutivos++;
+  }
+  const esSecuenciaValida = segs.length >= 2 &&
+    nums[0] <= 2 &&                                    // empieza en 1 o 2
+    consecutivos >= Math.floor(segs.length * 0.6);    // 60%+ son consecutivos
+
+  if (esSecuenciaValida) {
+    // Renumerar en orden por si acaso
+    segs.sort((a,b) => a.num - b.num);
+    segs.forEach((s, i) => s.num = i + 1);
+    CP.clips.segs = segs;
+    renderClipSegs();
+    document.getElementById('btn-search-clips').disabled = false;
+    toast(`${segs.length} lugares detectados`, 'success');
+    return;
+  }
+
+  // ── Método 2: headers en MAYÚSCULAS ──
+  const capSegs = [];
+  let counter = 0;
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
+    if (isAllCapsHeader(t)) { counter++; capSegs.push({ num: counter, name: t.replace(/[.:,;!?]+$/, '').trim() }); }
+  }
+  if (capSegs.length >= 3) {
+    CP.clips.segs = capSegs;
+    renderClipSegs();
+    document.getElementById('btn-search-clips').disabled = false;
+    toast(`${capSegs.length} lugares detectados`, 'success');
+    return;
+  }
+
+  // ── Método 3: IA (para guiones de narración corrida) ──
+  // Este es el caso más común en Crazy Places
+  detectSegsAI(text);
+}
+
+async function detectSegsAI(text) {
+  toast('Usando IA para detectar lugares...', 'info');
+  const btn = document.getElementById('btn-detect-segs') || document.querySelector('[data-action="detect-segs"]');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Detectando con IA...'; }
+  try {
+    const r = await callClaude(
+      [{ role: 'user', content: `Este es un guión de un documental de "lugares extremos e imposibles". Identificá TODOS los lugares geográficos reales que se mencionan como tema principal de cada sección (montañas, puentes, carreteras, islas, cuevas, etc).\n\nGUION:\n${text.slice(0, 8000)}\n\nDevolvé SOLO un JSON array con todos los lugares en orden de aparición, sin omitir ninguno:\n[{"num":1,"name":"Nombre exacto del lugar"},{"num":2,"name":"..."}]` }],
+      'Sos experto en identificar lugares geográficos en guiones de documentales. Detectás TODOS los lugares mencionados, sin omitir ninguno. Respondés solo con JSON válido, sin markdown ni explicaciones.', 2000
+    );
+    const parsed = JSON.parse(r.replace(/```json|```/g, '').trim());
+    if (!parsed.length) { toast('La IA no detectó lugares. Revisá el guión.', 'warning'); return; }
+    // Renumerar en orden
+    parsed.forEach((s, i) => s.num = i + 1);
+    CP.clips.segs = parsed;
+    renderClipSegs();
+    document.getElementById('btn-search-clips').disabled = false;
+    toast(`${CP.clips.segs.length} lugares detectados con IA`, 'success');
+  } catch (e) {
+    toast('Error detectando lugares: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Detectar Lugares'; }
+  }
+}
+
+function renderClipSegs() {
+  const panel = document.getElementById('clips-segs-panel');
+  const list  = document.getElementById('clips-segs-list');
+  panel.classList.remove('hidden');
+  list.innerHTML = CP.clips.segs.map((s, i) =>
+    `<div class="rowc mb8">` +
+    `<span class="cc1 mono">[${s.num}]</span>` +
+    `<span style="flex:1;padding:0 8px">${esc(s.name)}</span>` +
+    `<button class="btn btn-d btn-sm" data-action="remove-seg" data-idx="${i}">✕</button>` +
+    `</div>`
+  ).join('');
+}
+
+function queriesLocales(nombre) {
+  // Queries de fallback generadas localmente (sin IA)
+  return [
+    nombre + ' documentary 4k',
+    nombre + ' drone footage',
+    nombre + ' aerial view',
+    nombre + ' cinematic'
+  ];
+}
+
+async function genQueriesLote(segs) {
+  // Genera queries con Claude para un lote de lugares (max 5 por llamada)
+  const segList = segs.map(s => `[${s.num}] ${s.name}`).join('\n');
+  try {
+    const qt = await callClaude(
+      [{ role: 'user', content: `Para estos lugares de un documental de Crazy Places, genera 4 queries de YouTube por lugar (inglés, de específico a general). Solo footage REAL, cinematográfico, sin videojuegos ni animación.\n\n${segList}\n\nJSON: [{"num":1,"queries":["q1","q2","q3","q4"]},...]` }],
+      'Generas queries de YouTube para footage documental real. Solo JSON válido, sin markdown.', 2500
+    );
+    return JSON.parse(qt.replace(/```json|```/g, '').trim());
+  } catch (e) {
+    // Fallback: queries locales para este lote
+    return segs.map(s => ({ num: s.num, queries: queriesLocales(s.name) }));
+  }
+}
+
+async function searchClips() {
+  if (!CP.clips.segs.length) { toast('Sin segmentos detectados', 'warning'); return; }
+  const btn = document.getElementById('btn-search-clips');
+  btn.disabled = true;
+  let quotaError = false;
+  try {
+    // ── 1. Generar queries en LOTES de 5 lugares (evita truncar el JSON) ──
+    btn.innerHTML = '<span class="spin"></span> Generando queries...';
+    const todos = CP.clips.segs;
+    let queries = [];
+    for (let i = 0; i < todos.length; i += 5) {
+      const lote = todos.slice(i, i + 5);
+      btn.innerHTML = `<span class="spin"></span> Queries ${Math.min(i+5, todos.length)}/${todos.length}...`;
+      const qs = await genQueriesLote(lote);
+      queries = queries.concat(qs);
+    }
+
+    // Asegurar que TODOS los lugares tienen queries (fallback local)
+    for (const s of todos) {
+      if (!queries.find(q => q.num === s.num)) {
+        queries.push({ num: s.num, queries: queriesLocales(s.name) });
+      }
+    }
+
+    // ── 2. Buscar en YouTube ──
+    CP.clips.results = {}; CP.clips.sel = new Set();
+    const container = document.getElementById('clips-results');
+    container.innerHTML = '';
+    let conResultados = 0, sinResultados = 0;
+
+    for (let qi = 0; qi < queries.length; qi++) {
+      const seg = queries[qi];
+      const name = todos.find(s => s.num === seg.num)?.name || `Lugar ${seg.num}`;
+      btn.innerHTML = `<span class="spin"></span> Buscando ${qi+1}/${queries.length}: ${name.slice(0,20)}...`;
+
+      let videos = [];
+      for (const q of (seg.queries || [])) {
+        try {
+          const items = (await ytSearch(q, 8)).filter(isReal);
+          videos = [...videos, ...items];
+          if (videos.length >= 4) break;
+        } catch (e) {
+          if (String(e.message).includes('403')) { quotaError = true; break; }
+          continue;
+        }
+      }
+
+      const seen = new Set();
+      videos = videos.filter(v => { const id = v.id?.videoId; if (!id || seen.has(id)) return false; seen.add(id); return true; }).slice(0, 6);
+      CP.clips.results[seg.num] = videos;
+
+      if (videos.length) {
+        container.insertAdjacentHTML('beforeend', renderClipBlock(seg.num, name, videos));
+        conResultados++;
+      } else {
+        // Mostrar el lugar SIN resultados para que se vea qué pasó
+        container.insertAdjacentHTML('beforeend',
+          `<div class="mb16"><div class="pt mb8">📍 [${seg.num}] ${esc(name)}</div>` +
+          `<div class="muted" style="padding:8px 12px;border:1px dashed var(--t3);border-radius:8px">` +
+          `Sin resultados${quotaError ? ' (cuota de YouTube agotada)' : ' — probá buscar manualmente en YouTube'}</div></div>`);
+        sinResultados++;
+      }
+
+      if (quotaError) break;
+    }
+
+    document.getElementById('btn-vision').disabled = false;
+    document.getElementById('btn-export').disabled = false;
+    document.getElementById('btn-dl-script').disabled = false;
+    document.getElementById('btn-estimate').disabled = false;
+
+    if (quotaError) {
+      toast(`Cuota de YouTube agotada. ${conResultados} lugares encontrados antes del límite.`, 'warning');
+    } else {
+      toast(`Búsqueda completa: ${conResultados} con clips, ${sinResultados} sin resultados`, sinResultados > 0 ? 'warning' : 'success');
+    }
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '▶ Buscar YouTube'; }
+}
+
+function renderClipBlock(num, name, videos) {
+  return `<div class="mb16"><div class="pt mb8">📍 [${num}] ${esc(name)}</div>` +
+    videos.map(v => {
+      const vid = v.id?.videoId || '';
+      const title = v.snippet?.title || '';
+      const ch = v.snippet?.channelTitle || '';
+      const thumb = v.snippet?.thumbnails?.medium?.url || '';
+      return `<div class="rc glass" data-vid="${vid}">` +
+        `<input type="checkbox" data-action="select-clip" data-vid="${vid}" data-url="https://youtu.be/${vid}">` +
+        `<img class="rc-thumb" src="${thumb}" alt="" loading="lazy">` +
+        `<div class="rc-body"><div class="rc-title">${esc(title)}</div>` +
+        `<div class="rc-meta">${esc(ch)} · <a href="https://youtu.be/${vid}" target="_blank" class="cc1">youtu.be/${vid}</a></div>` +
+        `<div class="rc-acts"><span class="badge b-pending" id="vrd-${vid}">—</span></div></div></div>`;
+    }).join('') + '</div>';
+}
+
+async function analyzeVision() {
+  const cards = document.querySelectorAll('.rc[data-vid]');
+  if (!cards.length) { toast('Sin videos para analizar', 'warning'); return; }
+  const btn = document.getElementById('btn-vision');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Analizando...';
+  try {
+    const list = Array.from(cards).slice(0,16).map((c,i) => `${i+1}. ID:${c.dataset.vid} Título:"${c.querySelector('.rc-title')?.textContent||''}"`).join('\n');
+    const r = await callClaude(
+      [{ role: 'user', content: `Analizá estos videos para un documental de LUGARES EXTREMOS. Por título, clasificá:\n\n${list}\n\nJSON: [{"vid":"id","verdict":"USAR|REVISAR|DESCARTAR","reason":"breve"},...]\nUSAR = footage real útil, REVISAR = posible, DESCARTAR = no sirve.` }],
+      'Experto en footage documental. Solo JSON válido.', 1200
+    );
+    const verdicts = JSON.parse(r.replace(/```json|```/g, '').trim());
+    verdicts.forEach(v => {
+      const el = document.getElementById(`vrd-${v.vid}`);
+      if (!el) return;
+      const cls = v.verdict === 'USAR' ? 'b-usar' : v.verdict === 'REVISAR' ? 'b-revisar' : 'b-descartar';
+      el.className = `badge ${cls}`; el.textContent = v.verdict; el.title = v.reason || '';
+    });
+    toast('Análisis completado', 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '🤖 Analizar con IA'; }
+}
+
+function exportLinks() {
+  const checked = document.querySelectorAll('.rc input[type=checkbox]:checked');
+  let links = Array.from(checked).map(cb => cb.dataset.url);
+  if (!links.length) links = Array.from(document.querySelectorAll('.rc[data-vid]')).map(c => `https://youtu.be/${c.dataset.vid}`);
+  const blob = new Blob([links.join('\n')], { type: 'text/plain' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'crazy-places-clips.txt'; a.click();
+  toast(`${links.length} links exportados`, 'success');
+}
+
+// ── SCRIPTS ──────────────────────────────────────────────────
+const PROMPT_ES = `Sos un guionista cinematográfico especializado en documentales sobre lugares extremos e imposibles. Tu estilo evoca la majestuosidad de David Attenborough con la tensión de National Geographic.
+
+REGLAS ABSOLUTAS:
+— Narración pura y corrida. CERO marcadores estructurales como "NARRADOR:", "SEGMENTO:", "SECCIÓN:", "LUGAR 1:", etc.
+— Solo los marcadores numéricos [N] al inicio exacto de cada nuevo lugar, con ningún texto adicional en esa línea.
+— Tono: cinematográfico, evocador, tenso cuando corresponde, siempre fascinante.
+— Incluí datos reales: coordenadas, temperaturas, altitudes, fechas históricas.
+— Apertura dramática → desarrollo con datos → cierre con giro o reflexión, por cada lugar.
+— Extensión objetivo: 15,000 a 18,000 caracteres totales.`;
+
+const PROMPT_EN = `You are a cinematic scriptwriter specializing in documentaries about extreme and impossible places. Your style evokes David Attenborough's majesty with National Geographic's intensity.
+
+ABSOLUTE RULES:
+— Pure, flowing narration. ZERO structural markers like "NARRATOR:", "SEGMENT:", "SECTION:", "PLACE 1:", etc.
+— Only numeric markers [N] at the exact start of each new place, with no additional text on that line.
+— Tone: cinematic, evocative, tense when appropriate, always fascinating.
+— Include real data: coordinates, temperatures, altitudes, historical dates.
+— Target length: 15,000 to 18,000 characters.`;
+
+async function genScript() {
+  const topic = document.getElementById('scr-topic').value.trim();
+  const lang  = document.getElementById('scr-lang').value;
+  const n     = parseInt(document.getElementById('scr-n').value) || 5;
+  const extra = document.getElementById('scr-extra').value.trim();
+  if (!topic) { toast('Ingresá el lugar o tema', 'warning'); return; }
+  const btn = document.getElementById('btn-gen-scr');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Generando guión...';
+  try {
+    const sys  = lang === 'es' ? PROMPT_ES : PROMPT_EN;
+    const user = lang === 'es'
+      ? `Escribí un guión cinematográfico sobre: "${topic}"\nSecciones/lugares: ${n}. Usá marcadores [1] a [${n}] al inicio de cada lugar.\n${extra ? 'Instrucciones: ' + extra : ''}`
+      : `Write a cinematic script about: "${topic}"\nSections/places: ${n}. Use markers [1] to [${n}] at the start of each place.\n${extra ? 'Instructions: ' + extra : ''}`;
+    const script = await callClaude([{ role: 'user', content: user }], sys, 8000);
+    CP.scripts.own = script;
+    document.getElementById('scr-output').innerHTML = `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;color:var(--t2);max-height:480px;overflow-y:auto">${esc(script)}</div>`;
+    document.getElementById('scr-chars').textContent = script.length.toLocaleString() + ' chars';
+    document.getElementById('btn-save-scr').disabled = false;
+    document.getElementById('btn-to-v-own').disabled = false;
+    toast('Guión generado ✓', 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '✨ Generar Guión'; }
+}
+
+async function genScriptRef() {
+  const ref   = document.getElementById('scr-ref-in').value.trim();
+  const lang  = document.getElementById('scr-ref-lang').value;
+  const extra = document.getElementById('scr-ref-extra').value.trim();
+  if (!ref) { toast('Pegá la transcripción de referencia', 'warning'); return; }
+  const btn = document.getElementById('btn-gen-ref');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Adaptando...';
+  try {
+    const sys  = lang === 'es' ? PROMPT_ES : PROMPT_EN;
+    const user = lang === 'es'
+      ? `Usá esta transcripción como referencia estructural para crear un guión ORIGINAL sobre un lugar extremo diferente. No copies el contenido, solo la estructura narrativa.\n\nREFERENCIA:\n${ref.slice(0,4000)}\n\n${extra ? 'Instrucciones: ' + extra : ''}\n\nUsá marcadores [1], [2], etc. para cada sección.`
+      : `Use this transcript as structural reference to create an ORIGINAL script about a different extreme place. Don't copy content, only adapt narrative structure.\n\nREFERENCE:\n${ref.slice(0,4000)}\n\n${extra ? 'Instructions: ' + extra : ''}\n\nUse markers [1], [2], etc. for each section.`;
+    const script = await callClaude([{ role: 'user', content: user }], sys, 8000);
+    CP.scripts.ref = script;
+    document.getElementById('scr-ref-output').innerHTML = `<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;color:var(--t2);max-height:480px;overflow-y:auto">${esc(script)}</div>`;
+    document.getElementById('scr-ref-chars').textContent = script.length.toLocaleString() + ' chars';
+    document.getElementById('btn-save-ref').disabled = false;
+    document.getElementById('btn-to-v-ref').disabled = false;
+    toast('Adaptación generada ✓', 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '✨ Generar Adaptación'; }
+}
+
+async function saveScript(which) {
+  const content = which === 'ref' ? CP.scripts.ref : CP.scripts.own;
+  if (!content) { toast('Sin guión para guardar', 'warning'); return; }
+  const title = prompt('Título para este guión:');
+  if (!title) return;
+  const { error } = await CP.sb.from('scripts').insert({ title, content, created_by: CP.user.id });
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  toast('Guión guardado ✓', 'success');
+}
+
+async function loadSavedScripts() {
+  const { data } = await CP.sb.from('scripts').select('*').order('created_at', { ascending: false });
+  CP.scripts.saved = data || [];
+  const el = document.getElementById('scr-saved-list');
+  if (!el) return;
+  if (!CP.scripts.saved.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">Sin guiones guardados</div></div>'; return; }
+  el.innerHTML = CP.scripts.saved.map(s =>
+    `<div class="panel glass mb12">` +
+    `<div class="rowc mb8"><strong style="flex:1">${esc(s.title||'Sin título')}</strong>` +
+    `<span class="badge b-${s.status||'draft'}">${s.status||'draft'}</span>` +
+    `<span class="muted" style="margin-left:8px">${new Date(s.created_at).toLocaleDateString('es-AR')}</span></div>` +
+    `<div class="muted mb8" style="font-size:11px;max-height:54px;overflow:hidden">${esc((s.content||'').slice(0,200))}...</div>` +
+    `<div class="row">` +
+    `<button class="btn btn-v btn-sm" data-action="send-to-voices" data-which="saved:${s.id}">🎙️ Voces</button>` +
+    `<button class="btn btn-d btn-sm" data-action="delete-script" data-id="${s.id}">🗑️</button></div></div>`
+  ).join('');
+}
+
+async function deleteScript(id) {
+  if (!confirm('¿Eliminar este guión?')) return;
+  await CP.sb.from('scripts').delete().eq('id', id);
+  await loadSavedScripts();
+  toast('Eliminado', 'info');
+}
+
+function sendToVoices(which) {
+  let content = '';
+  if (which === 'own') content = CP.scripts.own;
+  else if (which === 'ref') content = CP.scripts.ref;
+  else if (which?.startsWith('saved:')) content = CP.scripts.saved.find(s => s.id === which.split(':')[1])?.content || '';
+  if (!content) { toast('Sin guión para enviar', 'warning'); return; }
+  document.getElementById('v-script').value = content;
+  showSec('voices');
+  detectVoiceSegs();
+}
+
+function ideaToScript(title) {
+  document.getElementById('scr-topic').value = title;
+  showSec('scripts');
+  toast('Idea cargada en el generador', 'success');
+}
+
+// ── IDEAS ────────────────────────────────────────────────────
+async function genIdeas() {
+  const focus = document.getElementById('id-focus').value;
+  const count = parseInt(document.getElementById('id-count').value) || 10;
+  const lang  = document.getElementById('id-lang').value;
+  const btn = document.getElementById('btn-gen-ideas');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Generando...';
+  try {
+    const user = lang === 'es'
+      ? `Generá ${count} ideas de documentales sobre "${focus}" para Crazy Places (YouTube, lugares extremos e imposibles).\nCada idea = lugar REAL, concreto, específico. Evitá los muy conocidos.\nJSON: [{"title":"Nombre del lugar","desc":"Por qué es extremo/imposible (1 frase)"},...]`
+      : `Generate ${count} documentary ideas about "${focus}" for Crazy Places (YouTube, extreme/impossible places).\nEach idea = REAL, concrete, specific place. Avoid very famous ones.\nJSON: [{"title":"Place Name","desc":"Why it's extreme/impossible (1 sentence)"},...]`;
+    const r = await callClaude([{ role: 'user', content: user }], 'Generás ideas de contenido. Solo JSON válido.', 2000);
+    CP.ideas.gen = JSON.parse(r.replace(/```json|```/g, '').trim());
+    const el = document.getElementById('id-gen-list');
+    el.innerHTML = CP.ideas.gen.map((idea, i) =>
+      `<div class="rc glass mb8"><input type="checkbox" class="idea-chk" data-idx="${i}">` +
+      `<div class="rc-body"><div class="rc-title">${esc(idea.title)}</div>` +
+      `<div class="rc-meta">${esc(idea.desc||'')}</div></div>` +
+      `<button class="btn btn-s btn-sm" data-action="idea-to-script" data-title="${escA(idea.title)}">📝</button></div>`
+    ).join('');
+    document.getElementById('btn-save-ideas').disabled = false;
+    toast(`${CP.ideas.gen.length} ideas generadas`, 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '✨ Generar Ideas'; }
+}
+
+async function saveIdeas() {
+  const checks = document.querySelectorAll('.idea-chk:checked');
+  if (!checks.length) { toast('Seleccioná al menos una idea', 'warning'); return; }
+  const toSave = Array.from(checks).map(cb => CP.ideas.gen[parseInt(cb.dataset.idx)]).filter(Boolean);
+  try {
+    for (const idea of toSave) await CP.sb.from('ideas').insert({ title: idea.title, category: idea.desc||'', source: 'generated', status: 'pending', created_by: CP.user.id });
+    toast(`${toSave.length} ideas guardadas`, 'success');
+    await loadIdeas();
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function searchComp() {
+  const q = document.getElementById('id-comp-q').value.trim();
+  const n = parseInt(document.getElementById('id-comp-n').value) || 12;
+  if (!q) { toast('Ingresá un término', 'warning'); return; }
+  const btn = document.getElementById('btn-search-comp');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Buscando...';
+  try {
+    const items = (await ytSearch(q, n)).filter(isReal);
+    CP.ideas.comp = items;
+    const el = document.getElementById('id-comp-list');
+    if (!items.length) { el.innerHTML = '<div class="muted">Sin resultados</div>'; return; }
+    el.innerHTML = items.map(v => {
+      const vid = v.id?.videoId || '';
+      const title = v.snippet?.title || '';
+      const ch = v.snippet?.channelTitle || '';
+      const thumb = v.snippet?.thumbnails?.medium?.url || '';
+      const pub = v.snippet?.publishedAt || '';
+      const days = pub ? Math.floor((Date.now() - new Date(pub).getTime()) / 86400000) : null;
+      return `<div class="rc glass mb8"><img class="rc-thumb" src="${thumb}" alt="" loading="lazy">` +
+        `<div class="rc-body"><div class="rc-title">${esc(title)}</div>` +
+        `<div class="rc-meta">${esc(ch)} ${days !== null ? '· hace ' + days + 'd' : ''}</div>` +
+        `<div class="rc-acts">` +
+        `<a href="https://youtu.be/${vid}" target="_blank" class="btn btn-s btn-sm">▶ Ver</a>` +
+        `<button class="btn btn-v btn-sm" data-action="analyze-comp" data-vid="${vid}">🤖 Como ref.</button>` +
+        `</div></div></div>`;
+    }).join('');
+    toast(`${items.length} videos encontrados`, 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '🔍 Buscar'; }
+}
+
+async function analyzeCompetitor(vid) {
+  toast('Analizando con IA...', 'info');
+  try {
+    const v = CP.ideas.comp.find(x => x.id?.videoId === vid);
+    const title = v?.snippet?.title || vid;
+    const desc  = (v?.snippet?.description || '').slice(0, 500);
+    const r = await callClaude(
+      [{ role: 'user', content: `Analizá este video de YouTube como referencia para un documental de lugares extremos:\n\nTítulo: "${title}"\nDescripción: "${desc}"\n\nDevolvé:\n1) Estructura del video (secciones/lugares detectados)\n2) Ganchos narrativos usados\n3) Por qué funciona para Crazy Places` }],
+      'Analista de contenido documental de YouTube.', 900
+    );
+    document.getElementById('scr-ref-in').value = `[Análisis de: ${title}]\n\n${r}`;
+    showSec('scripts');
+    document.querySelector('[data-tab="scr-ref"]')?.click();
+    toast('Análisis cargado en Guiones → Con Referencia', 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function loadIdeas() {
+  const { data } = await CP.sb.from('ideas').select('*').order('created_at', { ascending: false });
+  CP.ideas.saved = data || [];
+  renderSavedIdeas();
+}
+
+function renderSavedIdeas() {
+  const el = document.getElementById('id-saved-list');
+  if (!el) return;
+  const filter = document.getElementById('id-filter')?.value || 'all';
+  const list = filter === 'all' ? CP.ideas.saved : CP.ideas.saved.filter(i => i.status === filter);
+  if (!list.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">💡</div><div class="empty-t">Sin ideas</div></div>'; return; }
+  el.innerHTML = list.map(idea =>
+    `<div class="rc glass mb8"><div class="rc-body">` +
+    `<div class="rc-title">${esc(idea.title)}</div>` +
+    `<div class="rc-meta">${esc(idea.category||'')} · ${new Date(idea.created_at).toLocaleDateString('es-AR')}</div></div>` +
+    `<span class="badge b-${idea.status||'pending'}">${idea.status||'pending'}</span>` +
+    `<div class="row" style="gap:5px">` +
+    `<button class="btn btn-ok btn-sm" data-action="update-idea" data-id="${idea.id}" data-st="approved">✓</button>` +
+    `<button class="btn btn-d btn-sm" data-action="update-idea" data-id="${idea.id}" data-st="discarded">✕</button>` +
+    `<button class="btn btn-v btn-sm" data-action="idea-to-script" data-title="${escA(idea.title)}">📝</button>` +
+    `</div></div>`
+  ).join('');
+}
+
+async function updateIdea(id, status) {
+  await CP.sb.from('ideas').update({ status }).eq('id', id);
+  const idea = CP.ideas.saved.find(i => i.id === id);
+  if (idea) idea.status = status;
+  renderSavedIdeas();
+}
+
+// ── VERIFIER ─────────────────────────────────────────────────
+async function loadVerifierIdeas() {
+  const { data } = await CP.sb.from('ideas').select('*').eq('status', 'pending').order('created_at');
+  const el = document.getElementById('ver-ideas');
+  if (!el) return;
+  CP.ideas.pending = data || [];
+  if (!CP.ideas.pending.length) {
+    el.innerHTML = '<span class="muted">No hay ideas pendientes.</span>';
+    document.getElementById('btn-run-ver').disabled = true; return;
+  }
+  el.innerHTML = CP.ideas.pending.map(i =>
+    `<div class="rowc mb8"><span class="cc1">💡</span><span style="flex:1;padding:0 8px">${esc(i.title)}</span><span class="badge b-pending">pending</span></div>`
+  ).join('');
+  document.getElementById('btn-run-ver').disabled = false;
+}
+
+async function runVerifier() {
+  const ideas = CP.ideas.pending || [];
+  if (!ideas.length) { toast('Sin ideas para verificar', 'warning'); return; }
+  const btn = document.getElementById('btn-run-ver');
+  const pbar = document.getElementById('ver-pbar');
+  const pfill = document.getElementById('ver-pfill');
+  const statusEl = document.getElementById('ver-status');
+  const resEl = document.getElementById('ver-results');
+  btn.disabled = true; pbar.classList.remove('hidden'); resEl.innerHTML = '';
+  for (let i = 0; i < ideas.length; i++) {
+    const idea = ideas[i];
+    statusEl.textContent = `Verificando ${i+1}/${ideas.length}: ${idea.title}`;
+    pfill.style.width = `${((i+1)/ideas.length)*100}%`;
+    try {
+      const videos = (await ytSearch(`${idea.title} documentary extreme`, 6)).filter(isReal);
+      const cScore = Math.min(100, videos.length * 17);
+      const vList = videos.slice(0,3).map(v => `- ${v.snippet?.title}`).join('\n') || 'Ninguno';
+      const ev = await callClaude(
+        [{ role: 'user', content: `Evaluá esta idea para Crazy Places (documentales de lugares extremos):\n\nIdea: "${idea.title}"\nVideos en YouTube:\n${vList}\n\nJSON: {"verdict":"USAR|REVISAR|DESCARTAR","score":0-100,"reason":"breve","demand":"ALTA|MEDIA|BAJA"}` }],
+        'Evaluás viabilidad de ideas para YouTube. Solo JSON.', 400
+      );
+      const evd = JSON.parse(ev.replace(/```json|```/g, '').trim());
+      const newSt = evd.verdict === 'USAR' ? 'approved' : evd.verdict === 'DESCARTAR' ? 'discarded' : 'pending';
+      await CP.sb.from('ideas').update({ status: newSt }).eq('id', idea.id);
+      const cls = evd.verdict === 'USAR' ? 'b-usar' : evd.verdict === 'REVISAR' ? 'b-revisar' : 'b-descartar';
+      resEl.insertAdjacentHTML('beforeend',
+        `<div class="panel glass mb8"><div class="rowc">` +
+        `<span class="badge ${cls}">${evd.verdict}</span>` +
+        `<strong style="flex:1;padding:0 8px">${esc(idea.title)}</strong>` +
+        `<span class="muted mono">${evd.score}/100</span></div>` +
+        `<div class="muted mt8">${esc(evd.reason||'')} · Demanda: ${evd.demand||'—'} · Footage: ${cScore}%</div></div>`);
+    } catch (e) {
+      resEl.insertAdjacentHTML('beforeend', `<div class="panel glass mb8 cerr">${esc(idea.title)}: ${esc(e.message)}</div>`);
+    }
+    await sleep(700);
+  }
+  statusEl.textContent = `Verificación completa (${ideas.length} ideas)`;
+  btn.disabled = false;
+  toast('Verificación completa', 'success');
+  await loadVerifierIdeas();
+}
+
+// ── VOICES ───────────────────────────────────────────────────
+const V_RX = [
+  /^\[(\d+)\]/, /^LUGAR\s+(\d+)/i, /^PLACE\s+(\d+)/i,
+  /^SECCIÓN\s+(\d+)/i, /^SECTION\s+(\d+)/i
+];
+
+function detectVoiceSegs() {
+  const text = document.getElementById('v-script').value.trim();
+  if (!text) { toast('Pegá el guión', 'warning'); return; }
+  const lines = text.split('\n');
+  const segs = [];
+  let cur = null, curLines = [];
+  for (const line of lines) {
+    const t = line.trim();
+    let matched = false;
+    for (const rx of V_RX) {
+      if (rx.test(t)) {
+        if (cur !== null) segs.push({ num: cur, text: curLines.join('\n').trim() });
+        cur = segs.length + 1;
+        curLines = [t.replace(rx, '').trim()];
+        matched = true; break;
+      }
+    }
+    if (!matched && cur !== null) curLines.push(t);
+  }
+  if (cur !== null) segs.push({ num: cur, text: curLines.join('\n').trim() });
+  let valid = segs.filter(s => s.text.length > 10);
+  if (!valid.length) {
+    let counter = 0; cur = null; curLines = []; const capSegs = [];
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^[-=*_]{2,}$/.test(t) || t.length < 4) continue;
+      if (isAllCapsHeader(t)) { if (counter > 0) capSegs.push({ num: counter, text: curLines.join('\n').trim() }); counter++; curLines = []; }
+      else if (counter > 0) curLines.push(t);
+    }
+    if (counter > 0 && curLines.length) capSegs.push({ num: counter, text: curLines.join('\n').trim() });
+    valid = capSegs.filter(s => s.text.length > 10);
+  }
+  if (!valid.length) { detectVoiceSegsAI(text); return; }
+  CP.voices.segs = valid; CP.voices.audio = {};
+  renderVoiceSegs();
+  updateCostEst();
+  document.getElementById('btn-gen-all-v').disabled = false;
+  document.getElementById('btn-gen-es').disabled = false;
+  document.getElementById('btn-gen-en').disabled = false;
+  document.getElementById('btn-zip').disabled = false;
+  document.getElementById('cr-segs').textContent = valid.length;
+  toast(`${valid.length} segmentos detectados`, 'success');
+}
+
+async function detectVoiceSegsAI(text) {
+  toast('Usando IA para detectar segmentos...', 'info');
+  try {
+    const lines = text.split('\n').map((l,i) => `${i+1}: ${l}`).join('\n');
+    const r = await callClaude(
+      [{ role: 'user', content: `Detectá los inicios de segmentos/lugares en este guión:\n${lines.slice(0,3000)}\n\nJSON: [{"lineNum":5,"segNum":1},{"lineNum":20,"segNum":2},...]` }],
+      'Detectas segmentos en guiones. Solo JSON.', 600
+    );
+    const markers = JSON.parse(r.replace(/```json|```/g, '').trim());
+    const allLines = text.split('\n');
+    CP.voices.segs = markers.map((m, idx) => {
+      const start = m.lineNum - 1;
+      const end = markers[idx+1] ? markers[idx+1].lineNum - 1 : allLines.length;
+      return { num: m.segNum, text: allLines.slice(start, end).join('\n').trim() };
+    }).filter(s => s.text.length > 10);
+    CP.voices.audio = {};
+    renderVoiceSegs();
+    updateCostEst();
+    document.getElementById('btn-gen-all-v').disabled = false;
+    document.getElementById('cr-segs').textContent = CP.voices.segs.length;
+    toast(`${CP.voices.segs.length} segmentos (IA)`, 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+function updateCostEst() {
+  const chars = CP.voices.segs.reduce((s, seg) => s + seg.text.length, 0);
+  const est = Math.ceil(chars / 500 * 2 * 1.2);
+  document.getElementById('cr-est').textContent = `~${est} créditos`;
+  document.getElementById('cr-int').textContent = CP.prof?.tts_credits ?? '—';
+}
+
+function renderVoiceSegs() {
+  const el = document.getElementById('v-segs-list');
+  if (!el) return;
+  el.innerHTML = CP.voices.segs.map((seg, i) =>
+    `<div class="vseg glass mb12" id="vseg-${i}">` +
+    `<div class="vseg-hd"><span class="vseg-lbl">Segmento ${seg.num}</span><span class="vseg-ch">${seg.text.length} chars</span></div>` +
+    `<div class="vseg-txt">${esc(seg.text.slice(0,180))}${seg.text.length>180?'...':''}</div>` +
+    `<div class="lgrid">` +
+    `<div class="li" id="li-${i}-es"><span>🇪🇸</span><span class="lst" id="lst-${i}-es">Pendiente</span>` +
+    `<div class="row" style="gap:4px"><button class="btn btn-s btn-sm" data-action="gen-seg" data-idx="${i}" data-lang="es">🎙️</button>` +
+    `<a id="dl-${i}-es" class="btn btn-ok btn-sm hidden">⬇️</a></div></div>` +
+    `<div class="li" id="li-${i}-en"><span>🇺🇸</span><span class="lst" id="lst-${i}-en">Pendiente</span>` +
+    `<div class="row" style="gap:4px"><button class="btn btn-s btn-sm" data-action="gen-seg" data-idx="${i}" data-lang="en">🎙️</button>` +
+    `<a id="dl-${i}-en" class="btn btn-ok btn-sm hidden">⬇️</a></div></div></div>` +
+    `<button class="btn btn-v btn-sm mt8" data-action="gen-seg" data-idx="${i}">🎙️ Generar ES + EN</button></div>`
+  ).join('');
+}
+
+async function genAllVoices() {
+  setVoiceBtns(true);
+  for (let i = 0; i < CP.voices.segs.length; i++) { await genSeg(i, null); await sleep(400); }
+  setVoiceBtns(false);
+}
+
+async function genAllVoicesLang(lang) {
+  setVoiceBtns(true);
+  for (let i = 0; i < CP.voices.segs.length; i++) { await genSeg(i, lang); await sleep(300); }
+  setVoiceBtns(false);
+  // Auto-enable ZIP when done
+  document.getElementById('btn-zip').disabled = false;
+  toast(`Todo ${lang.toUpperCase()} generado ✓ — ZIP listo para descargar`, 'success');
+}
+
+function setVoiceBtns(disabled) {
+  ['btn-gen-all-v','btn-gen-es','btn-gen-en'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
+}
+
+async function genSeg(idx, lang) {
+  const seg = CP.voices.segs[idx];
+  if (!seg) return;
+  const langs = lang ? [lang] : ['es', 'en'];
+  for (const l of langs) {
+    const voiceId = CP.cfg[`voice_${l}`];
+    if (!voiceId) { toast(`Voice ID para ${l.toUpperCase()} no configurado en ⚙️`, 'warning'); continue; }
+    const stEl = document.getElementById(`lst-${idx}-${l}`);
+    const dlEl = document.getElementById(`dl-${idx}-${l}`);
+    if (stEl) { stEl.className = 'lst proc'; stEl.textContent = 'Generando...'; }
+    try {
+      const taskId = await ai33Gen(seg.text, voiceId);
+      if (stEl) stEl.textContent = 'Procesando...';
+      const url = await ai33Poll(taskId);
+      if (!CP.voices.audio[idx]) CP.voices.audio[idx] = {};
+      CP.voices.audio[idx][l] = url;
+      if (stEl) { stEl.className = 'lst done'; stEl.textContent = '✓ Listo'; }
+      if (dlEl) { dlEl.href = url; dlEl.download = `seg${seg.num}-${l}.mp3`; dlEl.classList.remove('hidden'); }
+      const cost = Math.ceil(seg.text.length / 500);
+      await CP.sb.from('profiles').update({ tts_credits: Math.max(0, (CP.prof.tts_credits||0) - cost) }).eq('id', CP.user.id);
+      CP.prof.tts_credits = Math.max(0, (CP.prof.tts_credits||0) - cost);
+      document.getElementById('cr-int').textContent = CP.prof.tts_credits;
+    } catch (e) {
+      if (stEl) { stEl.className = 'lst err'; stEl.textContent = 'Error'; }
+      toast(`Error seg ${seg.num} ${l.toUpperCase()}: ${e.message}`, 'error');
+    }
+  }
+}
+
+async function refreshCredits() {
+  const key = CP.cfg.ai33_key;
+  if (!key) { toast('AI33 key no configurada', 'warning'); return; }
+  try {
+    const r = await fetch('https://api.ai33.pro/v1/credits', { headers: { 'xi-api-key': key } });
+    const d = await r.json();
+    const amount = d.credits ?? d.ec_remain_credits ?? d.remaining ?? '?';
+    document.getElementById('cr-ai33').textContent = amount;
+  } catch (e) { toast('Error créditos AI33: ' + e.message, 'error'); }
+}
+
+async function dlZip() {
+  if (!Object.keys(CP.voices.audio).length) { toast('Generá voces primero', 'warning'); return; }
+  const btn = document.getElementById('btn-zip');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Preparando ZIP...';
+  try {
+    const zip = new JSZip();
+    for (const [i, langs] of Object.entries(CP.voices.audio)) {
+      for (const [l, url] of Object.entries(langs)) {
+        const seg = CP.voices.segs[parseInt(i)];
+        const res = await fetch(url);
+        zip.file(`seg${seg?.num||i}-${l}.mp3`, await res.blob());
+      }
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'crazy-places-audio.zip'; a.click();
+    toast('ZIP descargado', 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '📦 Descargar todo en ZIP'; }
+}
+
+// ── TITLES ───────────────────────────────────────────────────
+async function genTitles() {
+  const topic   = document.getElementById('t-topic').value.trim();
+  const summary = document.getElementById('t-summary').value.trim();
+  const lang    = document.getElementById('t-lang').value;
+  if (!topic) { toast('Ingresá el lugar o tema', 'warning'); return; }
+  const btn = document.getElementById('btn-gen-titles');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Generando...';
+  try {
+    const boiler = CP.cfg.desc_boilerplate || '';
+    const sys = lang === 'es'
+      ? 'Experto en SEO y títulos de YouTube para documentales de lugares extremos. Optimizás para CTR alto con curiosidad y urgencia.'
+      : 'Expert in YouTube SEO and titles for extreme places documentaries. You optimize for high CTR with curiosity and urgency.';
+    const user = lang === 'es'
+      ? `Generá 6 variantes de título Y una descripción para:\n\nLugar/Tema: "${topic}"\nResumen: "${summary}"\n\nLas 6 variantes:\n1. "Crazy Places | [lugar ajustado]"\n2. "Lugares Imposibles | [variación]"\n3. "[Lugar] — Crazy Places"\n4. Drama/pregunta formato sin marca\n5. Superlativo ("El lugar más...")\n6. Misterio/secreto\n\nJSON: {"titles":[{"format":"Serie 1","title":"..."},{"format":"Serie 2","title":"..."},{"format":"Serie 3","title":"..."},{"format":"Drama","title":"..."},{"format":"Superlativo","title":"..."},{"format":"Misterio","title":"..."}],"desc_dynamic":"Párrafo 1 dinámico (3-4 oraciones sobre el video)"}`
+      : `Generate 6 title variants AND a description for:\n\nPlace/Topic: "${topic}"\nSummary: "${summary}"\n\nThe 6 variants:\n1. "Crazy Places | [adjusted place]"\n2. "Impossible Places | [variation]"\n3. "[Place] — Crazy Places"\n4. Drama/question format without brand\n5. Superlative ("The most...")\n6. Mystery/secret\n\nJSON: {"titles":[{"format":"Series 1","title":"..."},{"format":"Series 2","title":"..."},{"format":"Series 3","title":"..."},{"format":"Drama","title":"..."},{"format":"Superlative","title":"..."},{"format":"Mystery","title":"..."}],"desc_dynamic":"Dynamic paragraph 1 (3-4 sentences about the video)"}`;
+    const r = await callClaude([{ role: 'user', content: user }], sys, 1800);
+    const d = JSON.parse(r.replace(/```json|```/g, '').trim());
+    const fullDesc = (d.desc_dynamic || '') + (boiler ? '\n\n' + boiler : '');
+    document.getElementById('titles-out').innerHTML =
+      `<div><div class="pt mb12">🏷️ Variantes de Título</div>` +
+      (d.titles||[]).map(t =>
+        `<div class="tvcard glass mb8"><div class="tvfmt">${esc(t.format)}</div>` +
+        `<div class="tvtitle">${esc(t.title)}</div>` +
+        `<button class="btn btn-s btn-sm" data-action="copy-txt" data-txt="${escA(t.title)}">📋 Copiar</button></div>`
+      ).join('') +
+      `<div class="pt mt20 mb12">📄 Descripción</div>` +
+      `<div class="panel glass"><div style="white-space:pre-wrap;font-size:12px;color:var(--t2);line-height:1.65;max-height:200px;overflow-y:auto">${esc(fullDesc)}</div>` +
+      `<button class="btn btn-s btn-sm mt12" data-action="copy-txt" data-txt="${escA(fullDesc)}">📋 Copiar descripción</button></div></div>`;
+    toast('Títulos y descripción generados ✓', 'success');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '✨ Generar Títulos y Descripción'; }
+}
+
+// ── DOWNLOAD SCRIPT (yt-dlp .bat) ────────────────────────────
+var _dlScript = '';
+
+function getDlConfig() {
+  return {
+    quality : document.getElementById('dl-quality')?.value || '1080',
+    audio   : document.getElementById('dl-audio')?.value || 'no',
+    noAv1   : document.getElementById('dl-no-av1')?.checked !== false,
+    noMeta  : document.getElementById('dl-no-meta')?.checked !== false
+  };
+}
+
+function buildFormat(cfg) {
+  const q = cfg.quality !== 'best' ? `[height<=${cfg.quality}]` : '';
+  const av1 = cfg.noAv1 ? '[vcodec!^=av01]' : '';
+  return cfg.audio === 'no'
+    ? `bestvideo[ext=mp4]${q}${av1}/bestvideo[ext=webm]${q}${av1}/bestvideo${q}${av1}`
+    : `bestvideo[ext=mp4]${q}${av1}+bestaudio[ext=m4a]/bestvideo${q}${av1}+bestaudio/best${q}${av1}`;
+}
+
+function buildMetaFlags(cfg) {
+  return cfg.noMeta ? ' --no-write-info-json --no-write-description --no-write-thumbnail --no-embed-metadata --no-embed-chapters' : '';
+}
+
+function collectSegments() {
+  const results = CP.clips.results;
+  const checkedVids = new Set(Array.from(document.querySelectorAll('.rc input[type=checkbox]:checked')).map(cb => cb.dataset.vid));
+  return CP.clips.segs.map(seg => {
+    const videos = results[seg.num] || [];
+    const toDownload = checkedVids.size > 0 ? videos.filter(v => checkedVids.has(v.id?.videoId)) : videos;
+    if (!toDownload.length) return null;
+    const safeName = seg.name.replace(/[^\w\s]/g,'').trim().replace(/\s+/g,'_').slice(0,35);
+    return { name: seg.name, folder: String(seg.num).padStart(2,'0') + '_' + safeName, urls: toDownload.map(v => v.id?.videoId||'').filter(Boolean) };
+  }).filter(Boolean);
+}
+
+async function estimateSize() {
+  const segments = collectSegments();
+  if (!segments.length) { toast('Sin videos para estimar', 'warning'); return; }
+  const el = document.getElementById('size-estimate');
+  const btn = document.getElementById('btn-estimate');
+  if (_srvConnected) {
+    btn.disabled = true; el.textContent = 'Consultando yt-dlp...';
+    const cfg = getDlConfig();
+    const allUrls = segments.flatMap(s => s.urls);
+    try {
+      const r = await fetch(SERVER + '/estimate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: allUrls, format: buildFormat(cfg) })
+      });
+      const d = await r.json();
+      if (d.total_bytes > 0) {
+        const mb = (d.total_bytes / 1048576).toFixed(0);
+        const gb = (d.total_bytes / 1073741824).toFixed(2);
+        el.textContent = `≈ ${gb >= 1 ? gb + ' GB' : mb + ' MB'} (${d.counted}/${allUrls.length} consultados)`;
+        el.style.color = 'var(--ok)';
+      } else { el.textContent = 'Sin datos de tamaño (YouTube no reporta)'; }
+    } catch(e) { el.textContent = 'Error: ' + e.message; }
+    btn.disabled = false;
+  } else {
+    const perVid = { '1080': 150, '720': 80, 'best': 200 };
+    const cfg = getDlConfig();
+    const total = segments.reduce((s,b) => s + b.urls.length * (perVid[cfg.quality]||150), 0);
+    el.textContent = `≈ ${total >= 1024 ? (total/1024).toFixed(1) + ' GB' : total + ' MB'} (aprox, servidor offline)`;
+    el.style.color = 'var(--c3)';
+  }
+}
+
+function genDlScript() {
+  const segments = collectSegments();
+  if (!segments.length) { toast('Sin videos para el script', 'warning'); return; }
+  const cfg = getDlConfig();
+  const fmt = buildFormat(cfg);
+  const meta = buildMetaFlags(cfg);
+  const totalVideos = segments.reduce((s,b) => s + b.urls.length, 0);
+  const L = [];
+  L.push('@echo off');
   L.push('chcp 65001 >nul');
   L.push('echo.');
   L.push('echo  CRAZY PLACES - Auto-Downloader');
